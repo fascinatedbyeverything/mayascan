@@ -212,7 +212,10 @@ def cmd_info(args: argparse.Namespace) -> None:
         print(f"\nv1 multi-class model: {os.path.basename(v1_path)} ({size_mb:.0f} MB)")
 
 
-from mayascan.config import HF_REPO_ID, CONFIDENCE_THRESHOLD, MIN_BLOB_SIZE, DEFAULT_RESOLUTION
+from mayascan.config import (
+    HF_REPO_ID, CONFIDENCE_THRESHOLD, MIN_BLOB_SIZE, DEFAULT_RESOLUTION,
+    V2_ARCH, V2_ENCODER, EPOCHS, BATCH_SIZE, LEARNING_RATE,
+)
 
 
 def cmd_download(args: argparse.Namespace) -> None:
@@ -259,6 +262,52 @@ def cmd_download(args: argparse.Namespace) -> None:
         print(f"    -> {downloaded}")
 
     print(f"\nModels saved to {model_dir}/")
+
+
+def cmd_train(args: argparse.Namespace) -> None:
+    """Train per-class binary segmentation models."""
+    from mayascan.train import train_all, train_class
+    from mayascan.data import list_available_classes, count_tiles
+
+    import torch
+
+    # Device selection
+    if args.device is not None:
+        device = args.device
+    elif torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
+    lidar_dir = os.path.join(args.data_dir, "lidar")
+    mask_dir = os.path.join(args.data_dir, "masks")
+
+    n_tiles = count_tiles(lidar_dir)
+    available = list_available_classes(mask_dir)
+    print(f"MayaScan Training")
+    print(f"  Device:  {device}")
+    print(f"  Data:    {args.data_dir} ({n_tiles} tiles)")
+    print(f"  Classes: {', '.join(available)}")
+    print(f"  Arch:    {args.arch} ({args.encoder})")
+    print(f"  Epochs:  {args.epochs}, Batch: {args.batch_size}, LR: {args.lr}")
+
+    classes = None if args.cls == "all" else [args.cls]
+
+    train_all(
+        lidar_dir=lidar_dir,
+        mask_dir=mask_dir,
+        save_dir=args.save_dir,
+        classes=classes,
+        arch=args.arch,
+        encoder=args.encoder,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        device=device,
+        use_tta=args.tta,
+    )
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
@@ -343,6 +392,19 @@ def main() -> None:
     dl_p.add_argument("--repo", default=None, help=f"HuggingFace repo ID (default: {HF_REPO_ID})")
     dl_p.add_argument("--force", action="store_true", help="Overwrite existing models")
 
+    # train command
+    train_p = subparsers.add_parser("train", help="Train per-class binary segmentation models")
+    train_p.add_argument("--data-dir", required=True, help="Data directory (with lidar/ and masks/ subdirs)")
+    train_p.add_argument("--save-dir", default="models", help="Directory to save model checkpoints")
+    train_p.add_argument("--cls", default="all", help="Class to train (building/platform/aguada/all)")
+    train_p.add_argument("--arch", default=V2_ARCH, help="Model architecture")
+    train_p.add_argument("--encoder", default=V2_ENCODER, help="Encoder backbone")
+    train_p.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs")
+    train_p.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size")
+    train_p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate")
+    train_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
+    train_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
+
     # evaluate command
     eval_p = subparsers.add_parser("evaluate", help="Evaluate models on validation set")
     eval_p.add_argument("--model-dir", default="models", help="v2 model directory")
@@ -367,6 +429,8 @@ def main() -> None:
         cmd_info(args)
     elif args.command == "download":
         cmd_download(args)
+    elif args.command == "train":
+        cmd_train(args)
     elif args.command == "evaluate":
         cmd_evaluate(args)
     elif args.command == "version":
