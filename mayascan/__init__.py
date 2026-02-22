@@ -18,6 +18,7 @@ from mayascan.report import generate_report, report_to_text, report_to_html, sav
 from mayascan.features import Feature, extract_features, filter_features, feature_summary
 from mayascan.augment import augment_sample, cutmix
 from mayascan.ensemble import average_probabilities, majority_vote, merge_results
+from mayascan.multiscale import run_multiscale_detection
 
 __all__ = [
     "__version__",
@@ -43,6 +44,7 @@ __all__ = [
     "average_probabilities",
     "majority_vote",
     "merge_results",
+    "run_multiscale_detection",
 ]
 
 

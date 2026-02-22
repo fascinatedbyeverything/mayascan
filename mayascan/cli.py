@@ -76,16 +76,30 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
         )
     elif model_dir and discover_v2_models(model_dir):
         v2_models = discover_v2_models(model_dir)
-        print(f"  Running v2 detection ({len(v2_models)} per-class models)...")
-        print(f"  TTA: {'enabled (8x)' if args.tta else 'disabled'}")
-        result = run_detection_v2(
-            viz,
-            model_dir=model_dir,
-            confidence_threshold=args.threshold,
-            use_tta=args.tta,
-            min_blob_size=args.min_blob,
-            device=args.device,
-        )
+        if getattr(args, 'multiscale', False):
+            from mayascan.multiscale import run_multiscale_detection, DEFAULT_SCALES
+            print(f"  Running multi-scale v2 detection ({len(v2_models)} models x {len(DEFAULT_SCALES)} scales)...")
+            print(f"  Scales: {DEFAULT_SCALES}")
+            print(f"  TTA: {'enabled (8x)' if args.tta else 'disabled'}")
+            result = run_multiscale_detection(
+                viz,
+                model_dir=model_dir,
+                confidence_threshold=args.threshold,
+                use_tta=args.tta,
+                min_blob_size=args.min_blob,
+                device=args.device,
+            )
+        else:
+            print(f"  Running v2 detection ({len(v2_models)} per-class models)...")
+            print(f"  TTA: {'enabled (8x)' if args.tta else 'disabled'}")
+            result = run_detection_v2(
+                viz,
+                model_dir=model_dir,
+                confidence_threshold=args.threshold,
+                use_tta=args.tta,
+                min_blob_size=args.min_blob,
+                device=args.device,
+            )
     else:
         print("  No model specified — running with random weights (demo mode)")
         result = mayascan.detect(viz, confidence_threshold=args.threshold)
@@ -380,6 +394,7 @@ def main() -> None:
     scan_p.add_argument("--resolution", type=float, default=DEFAULT_RESOLUTION, help="DEM resolution (m/px)")
     scan_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
     scan_p.add_argument("--min-blob", type=int, default=MIN_BLOB_SIZE, help="Min blob size (pixels)")
+    scan_p.add_argument("--multiscale", action="store_true", help="Use multi-scale inference (3 tile sizes)")
     scan_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # info command
