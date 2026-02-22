@@ -103,13 +103,13 @@ def process_upload(
     confidence_threshold: float,
     resolution: float,
     opacity: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], str]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], str, str]:
     """Process an uploaded DEM file through the full MayaScan pipeline.
 
     Returns
     -------
     tuple
-        (viz_rgb, overlay, blended, export_files, stats)
+        (viz_rgb, overlay, blended, export_files, stats, feature_list_md)
     """
     # --- Load with georeferencing ---
     data, geo = mayascan.read_raster(file)
@@ -199,9 +199,32 @@ def process_upload(
     conf_path = to_confidence_geotiff(result, Path(tmpdir) / f"{stem}_confidence.tif", pixel_size=resolution)
     report_json = save_report(result, Path(tmpdir) / f"{stem}_report.json",
                               input_path=file, pixel_size=resolution, format="json")
-    export_files = [str(csv_path), str(geojson_path), str(geotiff_path), str(conf_path), str(report_json)]
+    report_html = save_report(result, Path(tmpdir) / f"{stem}_report.html",
+                              input_path=file, pixel_size=resolution, format="html")
+    export_files = [str(csv_path), str(geojson_path), str(geotiff_path),
+                    str(conf_path), str(report_json), str(report_html)]
 
-    return viz_rgb, overlay, blended, export_files, stats_text
+    # --- Feature list (Markdown table) ---
+    from mayascan.features import extract_features
+    features = extract_features(result, pixel_size=resolution)
+
+    feature_lines = ["| # | Class | Area (m²) | Confidence | Centroid |",
+                     "|---|-------|-----------|------------|----------|"]
+    for i, feat in enumerate(features[:50], 1):  # top 50
+        geo_str = ""
+        if feat.centroid_geo:
+            geo_str = f"{feat.centroid_geo[0]:.2f}, {feat.centroid_geo[1]:.2f}"
+        else:
+            geo_str = f"{feat.centroid_col:.0f}, {feat.centroid_row:.0f} px"
+        feature_lines.append(
+            f"| {i} | {feat.class_name.capitalize()} | "
+            f"{feat.area_m2:,.1f} | {feat.confidence:.2f} | {geo_str} |"
+        )
+    if len(features) > 50:
+        feature_lines.append(f"| ... | *{len(features) - 50} more features* | | | |")
+    feature_md = "\n".join(feature_lines)
+
+    return viz_rgb, overlay, blended, export_files, stats_text, feature_md
 
 
 # ---------------------------------------------------------------------------
@@ -290,10 +313,15 @@ def build_demo() -> gr.Blocks:
                             interactive=False,
                         )
 
-                stats_box = gr.Textbox(
-                    label="Statistics",
-                    lines=12,
-                    interactive=False,
+                with gr.Row():
+                    stats_box = gr.Textbox(
+                        label="Statistics",
+                        lines=10,
+                        interactive=False,
+                    )
+                feature_list = gr.Markdown(
+                    label="Feature List",
+                    value="*Run detection to see features*",
                 )
                 download_files = gr.File(
                     label="Download Results (CSV, GeoJSON, GeoTIFF, Confidence, Report)",
@@ -305,14 +333,14 @@ def build_demo() -> gr.Blocks:
         detect_btn.click(
             fn=process_upload,
             inputs=[file_input, confidence_slider, resolution_input, opacity_slider],
-            outputs=[viz_image, det_image, blended_image, download_files, stats_box],
+            outputs=[viz_image, det_image, blended_image, download_files, stats_box, feature_list],
         )
 
         gr.Markdown(
             "---\n"
             f"**MayaScan** v{mayascan.__version__} | "
             "[GitHub](https://github.com/fascinatedbyeverything/mayascan) | "
-            "[Models](https://huggingface.co/fascinatedbyeverything/mayascan) | "
+            "[Models](https://huggingface.co/fascinated23/mayascan) | "
             "Built with [Gradio](https://gradio.app)\n\n"
             "Per-class binary segmentation (DeepLabV3+ ResNet-101) with "
             "test-time augmentation. Detects ancient Maya buildings, "
