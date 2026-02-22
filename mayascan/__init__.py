@@ -14,7 +14,7 @@ from mayascan.detect import run_detection as _run_detection
 from mayascan.detect import run_detection_v2 as _run_detection_v2
 from mayascan.detect import discover_v2_models
 
-from mayascan.report import generate_report, report_to_text, save_report
+from mayascan.report import generate_report, report_to_text, report_to_html, save_report
 
 __all__ = [
     "__version__",
@@ -29,6 +29,7 @@ __all__ = [
     "read_geo_info",
     "generate_report",
     "report_to_text",
+    "report_to_html",
     "save_report",
 ]
 

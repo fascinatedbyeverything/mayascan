@@ -129,11 +129,13 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
     Image.fromarray(viz_rgb).save(str(out_dir / f"{stem}_visualization.png"))
     overlay_path = to_overlay_png(result, viz, out_dir / f"{stem}_overlay.png")
 
-    # Save reports (text + JSON)
+    # Save reports (text + JSON + HTML)
     report_txt = save_report(result, out_dir / f"{stem}_report.txt",
                              input_path=input_path, pixel_size=resolution, format="text")
     report_json = save_report(result, out_dir / f"{stem}_report.json",
                               input_path=input_path, pixel_size=resolution, format="json")
+    report_html = save_report(result, out_dir / f"{stem}_report.html",
+                              input_path=input_path, pixel_size=resolution, format="html")
 
     print(f"\n  Exported to {out_dir}/:")
     print(f"    {csv_path.name}")
@@ -143,6 +145,7 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
     print(f"    {overlay_path.name}")
     print(f"    {report_txt.name}")
     print(f"    {report_json.name}")
+    print(f"    {report_html.name}")
     if geo.crs:
         print(f"    (georeferenced: {geo.crs})")
     print(f"  Time: {time.time() - t0:.1f}s")

@@ -8,7 +8,7 @@ import pytest
 
 from mayascan.detect import CLASS_NAMES, DetectionResult, GeoInfo
 from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
-from mayascan.report import generate_report, report_to_text, save_report
+from mayascan.report import generate_report, report_to_text, report_to_html, save_report
 
 
 @pytest.fixture
@@ -323,3 +323,20 @@ class TestReport:
         data = json.loads(result_path.read_text())
         assert data["software"] == "MayaScan"
         assert "classes" in data
+
+    def test_report_to_html(self, detection_result):
+        """report_to_html produces valid HTML with key elements."""
+        report = generate_report(detection_result)
+        html = report_to_html(report)
+        assert "<!DOCTYPE html>" in html
+        assert "MayaScan" in html
+        assert "Total Features" in html
+        assert "building" in html.lower() or "Building" in html
+
+    def test_save_report_html(self, detection_result, tmp_path):
+        """save_report writes an HTML file."""
+        out = tmp_path / "report.html"
+        result_path = save_report(detection_result, out, format="html")
+        assert result_path.exists()
+        content = result_path.read_text()
+        assert "<html>" in content

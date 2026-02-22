@@ -372,21 +372,35 @@ def run_detection_v2(
         low_conf = full_prob[cls_id] < confidence_threshold
         classes[cls_mask & low_conf] = 0
 
-    # Post-processing: remove small blobs
-    if min_blob_size > 0:
-        try:
-            from scipy import ndimage
-            for cls_id in class_probs:
-                cls_mask = classes == cls_id
-                if not cls_mask.any():
-                    continue
+    # Post-processing: morphological cleanup + remove small blobs
+    try:
+        from scipy import ndimage
+        for cls_id in class_probs:
+            cls_mask = classes == cls_id
+            if not cls_mask.any():
+                continue
+
+            # Morphological closing to fill small gaps within features
+            struct = ndimage.generate_binary_structure(2, 2)  # 8-connected
+            cls_mask = ndimage.binary_closing(cls_mask, structure=struct, iterations=1)
+
+            # Morphological opening to remove thin protrusions
+            cls_mask = ndimage.binary_opening(cls_mask, structure=struct, iterations=1)
+
+            # Remove small blobs
+            if min_blob_size > 0:
                 labeled, n_features = ndimage.label(cls_mask)
                 for i in range(1, n_features + 1):
                     blob = labeled == i
                     if blob.sum() < min_blob_size:
-                        classes[blob] = 0
-        except ImportError:
-            pass  # scipy not available, skip blob filtering
+                        cls_mask[blob] = False
+
+            # Update classes array: set cleaned mask, clear removed pixels
+            old_cls_mask = classes == cls_id
+            classes[old_cls_mask] = 0         # clear old
+            classes[cls_mask] = cls_id         # set cleaned
+    except ImportError:
+        pass  # scipy not available, skip morphological processing
 
     # Recalculate confidence for final class assignments
     confidence = np.take_along_axis(
