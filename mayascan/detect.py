@@ -31,6 +31,7 @@ from mayascan.config import (
     MIN_BLOB_SIZE,
     V2_ARCH,
     V2_ENCODER,
+    HF_REPO_ID,
 )
 from mayascan.models.unet import MayaScanUNet
 from mayascan.tile import slice_tiles, stitch_tiles
@@ -267,6 +268,40 @@ def run_detection(
     )
 
 
+def _auto_download_models(
+    model_dir: str,
+    arch: str = V2_ARCH,
+    encoder: str = V2_ENCODER,
+) -> dict[int, str]:
+    """Try to auto-download models from HuggingFace Hub.
+
+    Returns discovered model paths after download, or empty dict on failure.
+    """
+    try:
+        from huggingface_hub import hf_hub_download, list_repo_files
+    except ImportError:
+        return {}
+
+    try:
+        os.makedirs(model_dir, exist_ok=True)
+        files = list_repo_files(HF_REPO_ID)
+        model_files = [f for f in files if f.endswith(".pth")]
+
+        for mf in model_files:
+            dest = os.path.join(model_dir, os.path.basename(mf))
+            if not os.path.exists(dest):
+                print(f"Downloading {mf} from {HF_REPO_ID}...")
+                hf_hub_download(
+                    repo_id=HF_REPO_ID,
+                    filename=mf,
+                    local_dir=model_dir,
+                )
+
+        return discover_v2_models(model_dir, arch, encoder)
+    except Exception:
+        return {}
+
+
 def run_detection_v2(
     visualization: np.ndarray,
     model_dir: str,
@@ -320,9 +355,13 @@ def run_detection_v2(
     # Discover available per-class models
     model_paths = discover_v2_models(model_dir, arch, encoder)
     if not model_paths:
-        raise FileNotFoundError(
-            f"No v2 models found in {model_dir} for arch={arch}, encoder={encoder}"
-        )
+        # Try auto-downloading from HuggingFace
+        model_paths = _auto_download_models(model_dir, arch, encoder)
+        if not model_paths:
+            raise FileNotFoundError(
+                f"No v2 models found in {model_dir} for arch={arch}, encoder={encoder}. "
+                f"Download models with: mayascan download --model-dir {model_dir}"
+            )
 
     C, H, W = visualization.shape
     tiles, origins = slice_tiles(visualization, tile_size=tile_size, overlap=overlap)

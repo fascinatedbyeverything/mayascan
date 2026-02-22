@@ -369,10 +369,16 @@ class TestRunDetectionV2:
         assert isinstance(result, DetectionResult)
         assert result.classes.shape == (480, 480)
 
-    def test_missing_model_dir_raises(self, tmp_path):
-        """FileNotFoundError raised when no models found in directory."""
+    def test_missing_model_dir_raises(self, tmp_path, monkeypatch):
+        """FileNotFoundError raised when no models found and auto-download fails."""
+        import sys
+        detect_mod = sys.modules["mayascan.detect"]
+
         rng = np.random.default_rng(14)
         viz = rng.random((3, 480, 480)).astype(np.float32)
+
+        # Disable auto-download so the error is raised
+        monkeypatch.setattr(detect_mod, "_auto_download_models", lambda *a, **kw: {})
 
         with pytest.raises(FileNotFoundError, match="No v2 models found"):
             run_detection_v2(

@@ -15,7 +15,8 @@ import numpy as np
 from scipy.ndimage import label
 
 import mayascan
-from mayascan.detect import CLASS_NAMES, GeoInfo, discover_v2_models, run_detection_v2
+from mayascan.config import CLASS_NAMES, CLASS_COLORS, HF_REPO_ID
+from mayascan.detect import GeoInfo, discover_v2_models, run_detection_v2
 from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
 from mayascan.report import save_report
 
@@ -24,9 +25,6 @@ V2_MODEL_DIR = Path(__file__).parent / "models"
 
 # Temp directory — use external drive if available
 TMPDIR = os.environ.get("TMPDIR", tempfile.gettempdir())
-
-# HuggingFace model repo for auto-download
-HF_MODEL_REPO = os.environ.get("MAYASCAN_HF_REPO", "fascinated23/mayascan")
 
 
 def _ensure_models() -> None:
@@ -39,15 +37,15 @@ def _ensure_models() -> None:
         from huggingface_hub import hf_hub_download, list_repo_files
 
         V2_MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        files = list_repo_files(HF_MODEL_REPO)
+        files = list_repo_files(HF_REPO_ID)
         model_files = [f for f in files if f.endswith(".pth")]
 
         for mf in model_files:
             dest = V2_MODEL_DIR / os.path.basename(mf)
             if not dest.exists():
-                print(f"Downloading {mf} from {HF_MODEL_REPO}...")
+                print(f"Downloading {mf} from {HF_REPO_ID}...")
                 hf_hub_download(
-                    repo_id=HF_MODEL_REPO,
+                    repo_id=HF_REPO_ID,
                     filename=mf,
                     local_dir=str(V2_MODEL_DIR),
                 )
@@ -57,18 +55,6 @@ def _ensure_models() -> None:
 
 # Auto-download models on import
 _ensure_models()
-
-# ---------------------------------------------------------------------------
-# Class colours (RGBA)
-# ---------------------------------------------------------------------------
-
-CLASS_COLORS: dict[int, tuple[int, int, int, int]] = {
-    0: (0, 0, 0, 0),           # background — transparent
-    1: (255, 60, 60, 180),     # building — red
-    2: (60, 200, 60, 180),     # platform — green
-    3: (50, 120, 255, 180),    # aguada — blue
-}
-
 
 def colorize_classes(classes: np.ndarray) -> np.ndarray:
     """Convert a (H, W) class-index map to an RGBA image."""
@@ -340,7 +326,7 @@ def build_demo() -> gr.Blocks:
             "---\n"
             f"**MayaScan** v{mayascan.__version__} | "
             "[GitHub](https://github.com/fascinatedbyeverything/mayascan) | "
-            "[Models](https://huggingface.co/fascinated23/mayascan) | "
+            f"[Models](https://huggingface.co/{HF_REPO_ID}) | "
             "Built with [Gradio](https://gradio.app)\n\n"
             "Per-class binary segmentation (DeepLabV3+ ResNet-101) with "
             "test-time augmentation. Detects ancient Maya buildings, "
