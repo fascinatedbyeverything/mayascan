@@ -10,7 +10,9 @@ Upload a LiDAR DEM, get back a map of probable ancient structures — buildings,
 - **Terrain visualization** — automatic SVF, openness, and slope computation from raw DEMs (using rvt-py or scipy fallback)
 - **Test-Time Augmentation (TTA)** — 8-fold augmentation (4 rotations x 2 flips) for robust predictions
 - **Georeferenced output** — CRS and affine transform propagated from input GeoTIFFs to all exports
-- **Multiple export formats** — GeoTIFF, GeoJSON (with polygon contours), CSV
+- **Multiple export formats** — GeoTIFF, GeoJSON (with polygon contours), CSV, Shapefile, HTML/JSON reports
+- **Feature analysis** — extract, filter, and summarize individual features by area, confidence, and class
+- **Morphological post-processing** — closing/opening to clean feature boundaries
 - **Batch processing** — process entire survey directories in one command
 - **Web interface** — Gradio app with interactive overlay visualization
 - **HuggingFace integration** — download pre-trained models with one command
@@ -78,6 +80,15 @@ from mayascan.export import to_csv, to_geojson, to_geotiff
 to_csv(result, "detections.csv")
 to_geojson(result, "detections.geojson")     # polygon contours
 to_geotiff(result, "detections.tif")         # georeferenced class map
+
+# Feature-level analysis
+features = mayascan.extract_features(result)
+large = mayascan.filter_features(features, min_area=50.0, min_confidence=0.8)
+summary = mayascan.feature_summary(large)
+
+# Reports
+report = mayascan.generate_report(result, input_path="input.tif")
+mayascan.save_report(result, "report.html", format="html")
 ```
 
 ### Web App
@@ -103,11 +114,11 @@ Per-class Binary Models (DeepLabV3+ ResNet-101)
     ↓  → per-class probability maps
 Test-Time Augmentation (8 orientations)
     ↓
-Post-processing (threshold + blob filtering)
+Post-processing (threshold + morphological cleanup + blob filtering)
     ↓
 DetectionResult (classes, confidence, geo)
     ↓
-Export (GeoTIFF, GeoJSON, CSV)
+Export (GeoTIFF, GeoJSON, CSV, Shapefile, Reports)
 ```
 
 ### Model Architecture
@@ -190,18 +201,20 @@ mayascan download [--model-dir DIR] [--repo REPO_ID] [--force]
 
 ```
 mayascan/
-├── __init__.py          # Public API (visualize, detect, detect_v2, process_dem)
-├── detect.py            # Detection pipeline (v1 multi-class, v2 per-class)
+├── __init__.py          # Public API
+├── detect.py            # Detection pipeline (v1 multi-class, v2 per-class binary)
 ├── visualize.py         # SVF, openness, slope from DEMs
-├── tile.py              # Tile slicing and stitching
-├── export.py            # CSV, GeoJSON, GeoTIFF export
-├── cli.py               # CLI (scan, info, download)
+├── tile.py              # Tile slicing and stitching with overlap blending
+├── export.py            # CSV, GeoJSON, GeoTIFF, Shapefile, overlay PNG export
+├── report.py            # Report generation (text, JSON, HTML)
+├── features.py          # Feature extraction, filtering, and summary
+├── cli.py               # CLI (scan, info, download, version)
 ├── models/
 │   └── unet.py          # U-Net wrapper
-├── app.py               # Gradio web interface
-├── train_v2.py          # v2 training pipeline
+├── app.py               # Gradio web interface with auto model download
+├── train_v2.py          # v2 training pipeline with checkpoint resume
 ├── evaluate.py          # Model evaluation and benchmarking
-└── tests/               # Test suite (47 tests)
+└── tests/               # Test suite (75 tests)
 ```
 
 ## Requirements
@@ -216,8 +229,8 @@ Optional: rasterio (georeferenced I/O), rvt-py (high-quality visualizations), gr
 ## Links
 
 - [GitHub](https://github.com/fascinatedbyeverything/mayascan)
-- [HuggingFace Models](https://huggingface.co/fascinatedbyeverything/mayascan)
-- [HuggingFace Demo](https://huggingface.co/spaces/fascinatedbyeverything/mayascan)
+- [HuggingFace Models](https://huggingface.co/fascinated23/mayascan)
+- [HuggingFace Demo](https://huggingface.co/spaces/fascinated23/mayascan)
 - [Chactun Dataset](https://figshare.com/articles/dataset/chactun/22202395)
 
 ## References
