@@ -17,7 +17,8 @@ from scipy.ndimage import label
 import mayascan
 from mayascan.config import CLASS_NAMES, CLASS_COLORS, HF_REPO_ID
 from mayascan.detect import GeoInfo, discover_v2_models, run_detection_v2
-from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
+from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff, to_overlay_png, to_kml
+from mayascan.multiscale import run_multiscale_detection
 from mayascan.report import save_report
 
 # Default model directory for v2 per-class models
@@ -89,6 +90,7 @@ def process_upload(
     confidence_threshold: float,
     resolution: float,
     opacity: float,
+    use_multiscale: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], str, str]:
     """Process an uploaded DEM file through the full MayaScan pipeline.
 
@@ -122,7 +124,13 @@ def process_upload(
 
     # --- Detect ---
     v2_models = discover_v2_models(str(V2_MODEL_DIR))
-    if v2_models:
+    if v2_models and use_multiscale:
+        result = run_multiscale_detection(
+            viz,
+            model_dir=str(V2_MODEL_DIR),
+            confidence_threshold=confidence_threshold,
+        )
+    elif v2_models:
         result = run_detection_v2(
             viz,
             model_dir=str(V2_MODEL_DIR),
@@ -187,8 +195,11 @@ def process_upload(
                               input_path=file, pixel_size=resolution, format="json")
     report_html = save_report(result, Path(tmpdir) / f"{stem}_report.html",
                               input_path=file, pixel_size=resolution, format="html")
+    overlay_path = to_overlay_png(result, viz, Path(tmpdir) / f"{stem}_overlay.png", opacity=opacity)
+    kml_path = to_kml(result, Path(tmpdir) / f"{stem}_detections.kml", pixel_size=resolution)
     export_files = [str(csv_path), str(geojson_path), str(geotiff_path),
-                    str(conf_path), str(report_json), str(report_html)]
+                    str(conf_path), str(overlay_path), str(kml_path),
+                    str(report_json), str(report_html)]
 
     # --- Feature list (Markdown table) ---
     from mayascan.features import extract_features
@@ -264,6 +275,11 @@ def build_demo() -> gr.Blocks:
                     step=0.05,
                     label="Overlay Opacity",
                 )
+                multiscale_checkbox = gr.Checkbox(
+                    value=False,
+                    label="Multi-Scale Inference",
+                    info="Run at 3 tile sizes and merge (slower but more accurate).",
+                )
                 detect_btn = gr.Button(
                     "Detect Structures",
                     variant="primary",
@@ -310,7 +326,7 @@ def build_demo() -> gr.Blocks:
                     value="*Run detection to see features*",
                 )
                 download_files = gr.File(
-                    label="Download Results (CSV, GeoJSON, GeoTIFF, Confidence, Report)",
+                    label="Download Results (CSV, GeoJSON, GeoTIFF, KML, Overlay, Reports)",
                     file_count="multiple",
                     interactive=False,
                 )
@@ -318,7 +334,7 @@ def build_demo() -> gr.Blocks:
         # --- Wire up the button ---
         detect_btn.click(
             fn=process_upload,
-            inputs=[file_input, confidence_slider, resolution_input, opacity_slider],
+            inputs=[file_input, confidence_slider, resolution_input, opacity_slider, multiscale_checkbox],
             outputs=[viz_image, det_image, blended_image, download_files, stats_box, feature_list],
         )
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from mayascan.detect import DetectionResult, GeoInfo
 from mayascan.visualize import compute_visualizations as _compute_visualizations
