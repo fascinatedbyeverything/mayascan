@@ -1,4 +1,4 @@
-"""Tests for mayascan.export — CSV, GeoJSON, and GeoTIFF export."""
+"""Tests for mayascan.export and mayascan.report modules."""
 
 import csv
 import json
@@ -8,6 +8,7 @@ import pytest
 
 from mayascan.detect import CLASS_NAMES, DetectionResult, GeoInfo
 from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
+from mayascan.report import generate_report, report_to_text, save_report
 
 
 @pytest.fixture
@@ -207,3 +208,118 @@ class TestGeoExport:
         coords = data["features"][0]["geometry"]["coordinates"][0]
         # Convex hull should have more than 4 points (not just a bounding box)
         assert len(coords) > 4
+
+
+class TestReport:
+    """Tests for mayascan.report module."""
+
+    def test_generate_report_structure(self, detection_result):
+        """generate_report returns a dict with expected top-level keys."""
+        report = generate_report(detection_result)
+
+        assert "timestamp" in report
+        assert report["software"] == "MayaScan"
+        assert report["dimensions"] == {"height": 50, "width": 50}
+        assert report["total_features"] >= 2  # building + platform
+        assert report["total_feature_area_m2"] > 0
+        assert "classes" in report
+        assert "feature_density_per_km2" in report
+
+    def test_report_classes(self, detection_result):
+        """Report includes per-class stats with feature lists."""
+        report = generate_report(detection_result)
+
+        assert "building" in report["classes"]
+        assert "platform" in report["classes"]
+
+        building = report["classes"]["building"]
+        assert building["count"] >= 1
+        assert building["total_area_m2"] > 0
+        assert 0 < building["mean_confidence"] <= 1
+        assert len(building["features"]) >= 1
+
+        # Features sorted by area descending
+        areas = [f["area_m2"] for f in building["features"]]
+        assert areas == sorted(areas, reverse=True)
+
+    def test_report_feature_details(self, detection_result):
+        """Each feature has required fields."""
+        report = generate_report(detection_result, pixel_size=0.5)
+
+        for cls_data in report["classes"].values():
+            for feat in cls_data["features"]:
+                assert "id" in feat
+                assert "pixel_count" in feat
+                assert "area_m2" in feat
+                assert "confidence" in feat
+                assert "centroid_px" in feat
+                assert "bbox_px" in feat
+
+    def test_report_with_geo(self):
+        """Report features include geo coordinates when GeoInfo is present."""
+        classes = np.zeros((50, 50), dtype=np.int64)
+        confidence = np.full((50, 50), 0.1, dtype=np.float32)
+        classes[10:20, 10:20] = 1
+        confidence[10:20, 10:20] = 0.9
+
+        geo = GeoInfo(
+            crs="EPSG:32616",
+            transform=(0.5, 0.0, 500000.0, 0.0, -0.5, 2000000.0),
+            resolution=0.5,
+        )
+        result = DetectionResult(
+            classes=classes, confidence=confidence,
+            class_names=dict(CLASS_NAMES), geo=geo,
+        )
+
+        report = generate_report(result)
+        assert report["crs"] == "EPSG:32616"
+        assert report["resolution_m"] == 0.5
+
+        building = report["classes"]["building"]
+        assert building["count"] >= 1
+        feat = building["features"][0]
+        assert "centroid_geo" in feat
+        # geo_x should be near 500000
+        assert feat["centroid_geo"][0] > 500000
+
+    def test_report_to_text(self, detection_result):
+        """report_to_text produces readable text with key sections."""
+        report = generate_report(detection_result)
+        text = report_to_text(report)
+
+        assert "MAYASCAN DETECTION REPORT" in text
+        assert "SUMMARY" in text
+        assert "BUILDING" in text
+        assert "PLATFORM" in text
+        assert "Total features:" in text
+
+    def test_report_empty_class(self):
+        """Report handles classes with zero features."""
+        classes = np.zeros((20, 20), dtype=np.int64)
+        confidence = np.full((20, 20), 0.1, dtype=np.float32)
+        result = DetectionResult(
+            classes=classes, confidence=confidence,
+            class_names=dict(CLASS_NAMES),
+        )
+        report = generate_report(result)
+        assert report["total_features"] == 0
+        for cls_data in report["classes"].values():
+            assert cls_data["count"] == 0
+
+    def test_save_report_text(self, detection_result, tmp_path):
+        """save_report writes a text file."""
+        out = tmp_path / "report.txt"
+        result_path = save_report(detection_result, out, format="text")
+        assert result_path.exists()
+        content = result_path.read_text()
+        assert "MAYASCAN" in content
+
+    def test_save_report_json(self, detection_result, tmp_path):
+        """save_report writes valid JSON."""
+        out = tmp_path / "report.json"
+        result_path = save_report(detection_result, out, format="json")
+        assert result_path.exists()
+        data = json.loads(result_path.read_text())
+        assert data["software"] == "MayaScan"
+        assert "classes" in data

@@ -17,6 +17,7 @@ from scipy.ndimage import label
 import mayascan
 from mayascan.detect import CLASS_NAMES, GeoInfo, discover_v2_models, run_detection_v2
 from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
+from mayascan.report import save_report
 
 # Default model directory for v2 per-class models
 V2_MODEL_DIR = Path(__file__).parent / "models"
@@ -196,7 +197,9 @@ def process_upload(
     geojson_path = to_geojson(result, Path(tmpdir) / f"{stem}_detections.geojson", pixel_size=resolution)
     geotiff_path = to_geotiff(result, Path(tmpdir) / f"{stem}_detections.tif", pixel_size=resolution)
     conf_path = to_confidence_geotiff(result, Path(tmpdir) / f"{stem}_confidence.tif", pixel_size=resolution)
-    export_files = [str(csv_path), str(geojson_path), str(geotiff_path), str(conf_path)]
+    report_json = save_report(result, Path(tmpdir) / f"{stem}_report.json",
+                              input_path=file, pixel_size=resolution, format="json")
+    export_files = [str(csv_path), str(geojson_path), str(geotiff_path), str(conf_path), str(report_json)]
 
     return viz_rgb, overlay, blended, export_files, stats_text
 
@@ -293,7 +296,7 @@ def build_demo() -> gr.Blocks:
                     interactive=False,
                 )
                 download_files = gr.File(
-                    label="Download Results (CSV, GeoJSON, GeoTIFF, Confidence)",
+                    label="Download Results (CSV, GeoJSON, GeoTIFF, Confidence, Report)",
                     file_count="multiple",
                     interactive=False,
                 )

@@ -24,6 +24,7 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
     import mayascan
     from mayascan.detect import discover_v2_models, run_detection_v2, GeoInfo
     from mayascan.export import to_csv, to_geojson, to_geotiff, to_overlay_png
+    from mayascan.report import save_report
 
     t0 = time.time()
 
@@ -128,12 +129,20 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
     Image.fromarray(viz_rgb).save(str(out_dir / f"{stem}_visualization.png"))
     overlay_path = to_overlay_png(result, viz, out_dir / f"{stem}_overlay.png")
 
+    # Save reports (text + JSON)
+    report_txt = save_report(result, out_dir / f"{stem}_report.txt",
+                             input_path=input_path, pixel_size=resolution, format="text")
+    report_json = save_report(result, out_dir / f"{stem}_report.json",
+                              input_path=input_path, pixel_size=resolution, format="json")
+
     print(f"\n  Exported to {out_dir}/:")
     print(f"    {csv_path.name}")
     print(f"    {geojson_path.name}")
     print(f"    {tiff_path.name}")
     print(f"    {stem}_visualization.png")
     print(f"    {overlay_path.name}")
+    print(f"    {report_txt.name}")
+    print(f"    {report_json.name}")
     if geo.crs:
         print(f"    (georeferenced: {geo.crs})")
     print(f"  Time: {time.time() - t0:.1f}s")
@@ -279,6 +288,9 @@ def main() -> None:
     dl_p.add_argument("--repo", default=None, help=f"HuggingFace repo ID (default: {HF_REPO_ID})")
     dl_p.add_argument("--force", action="store_true", help="Overwrite existing models")
 
+    # version command
+    subparsers.add_parser("version", help="Show MayaScan version")
+
     args = parser.parse_args()
 
     if args.command == "scan":
@@ -287,6 +299,9 @@ def main() -> None:
         cmd_info(args)
     elif args.command == "download":
         cmd_download(args)
+    elif args.command == "version":
+        import mayascan
+        print(f"MayaScan v{mayascan.__version__}")
     else:
         parser.print_help()
         sys.exit(1)
