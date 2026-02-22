@@ -20,6 +20,12 @@ from mayascan.augment import augment_sample, cutmix
 from mayascan.ensemble import average_probabilities, majority_vote, merge_results
 from mayascan.multiscale import run_multiscale_detection
 from mayascan.benchmark import BenchmarkResult, run_benchmark, format_benchmark
+from mayascan.spatial import (
+    Cluster,
+    cluster_features,
+    identify_site_core,
+    settlement_hierarchy,
+)
 from mayascan.morphology import (
     ShapeDescriptors,
     FeatureProfile,
@@ -63,6 +69,10 @@ __all__ = [
     "analyze_features",
     "classify_structure",
     "settlement_summary",
+    "Cluster",
+    "cluster_features",
+    "identify_site_core",
+    "settlement_hierarchy",
 ]
 
 
