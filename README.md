@@ -290,6 +290,8 @@ mayascan/
 ├── benchmark.py         # Inference speed benchmarking
 ├── morphology.py        # Shape descriptors and structure sub-typing
 ├── spatial.py           # DBSCAN clustering and settlement hierarchy
+├── heatmap.py           # Gaussian KDE density maps with RGBA export
+├── comparison.py        # Detection comparison and change analysis
 ├── crs.py               # Coordinate reference system utilities
 ├── classify.py          # Ground-point classification (PDAL)
 ├── cli.py               # CLI (scan, train, evaluate, benchmark, info, download, version)
@@ -299,7 +301,7 @@ mayascan/
 ├── train_v2.py          # Standalone training script
 ├── evaluate.py          # Model evaluation
 ├── upload_models.py     # HuggingFace model upload with model card
-└── tests/               # 269 tests
+└── tests/               # 300 tests
 ```
 
 ## Requirements
