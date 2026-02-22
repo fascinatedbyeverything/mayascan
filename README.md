@@ -22,6 +22,10 @@ Upload a LiDAR DEM, get back a map of probable ancient structures — buildings,
 - **Web interface** — Gradio app with interactive overlay visualization and multi-scale option
 - **HuggingFace integration** — auto-download pre-trained models, upload with model card generation
 - **Reusable training pipeline** — modular data loading, losses, augmentation, and training loop
+- **Shape analysis** — compactness, elongation, rectangularity, and solidity metrics per feature
+- **Structure sub-typing** — automatic classification into temple, residence, plaza, causeway, reservoir
+- **Spatial clustering** — DBSCAN-based site identification with settlement hierarchy ranking
+- **Inference benchmarking** — compare throughput across configurations to optimize for your hardware
 
 ## Quick Start
 
@@ -116,6 +120,16 @@ merged = merge_results([result1, result2], method="average")
 
 # Reports
 mayascan.save_report(result, "report.html", format="html")
+
+# Shape analysis and structure sub-typing
+profiles = mayascan.analyze_features(features)
+for p in profiles:
+    print(f"{p.structure_type}: compactness={p.shape.compactness:.2f}")
+
+# Spatial clustering and settlement hierarchy
+clusters = mayascan.cluster_features(features, eps_px=100, min_features=3)
+core = mayascan.identify_site_core(clusters)
+hierarchy = mayascan.settlement_hierarchy(clusters)
 ```
 
 ### Web App
@@ -274,6 +288,8 @@ mayascan/
 ├── train.py             # Reusable training loop
 ├── crossval.py          # K-fold cross-validation
 ├── benchmark.py         # Inference speed benchmarking
+├── morphology.py        # Shape descriptors and structure sub-typing
+├── spatial.py           # DBSCAN clustering and settlement hierarchy
 ├── crs.py               # Coordinate reference system utilities
 ├── classify.py          # Ground-point classification (PDAL)
 ├── cli.py               # CLI (scan, train, evaluate, benchmark, info, download, version)
@@ -283,7 +299,7 @@ mayascan/
 ├── train_v2.py          # Standalone training script
 ├── evaluate.py          # Model evaluation
 ├── upload_models.py     # HuggingFace model upload with model card
-└── tests/               # 221 tests
+└── tests/               # 269 tests
 ```
 
 ## Requirements
