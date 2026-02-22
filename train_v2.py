@@ -373,10 +373,25 @@ def train_class(
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     best_iou = 0.0
+    start_epoch = 0
     save_path = os.path.join(SAVE_DIR, f"mayascan_v2_{cls_name}_{arch}_{encoder}.pth")
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    for epoch in range(epochs):
+    # Resume from checkpoint if it exists
+    if os.path.isfile(save_path):
+        print(f"  Resuming from checkpoint: {save_path}")
+        checkpoint = torch.load(save_path, map_location=device, weights_only=False)
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["state_dict"])
+            best_iou = checkpoint.get("best_iou", 0.0)
+            start_epoch = checkpoint.get("epoch", 0)
+            if "optimizer_state" in checkpoint:
+                optimizer.load_state_dict(checkpoint["optimizer_state"])
+            if "scheduler_state" in checkpoint:
+                scheduler.load_state_dict(checkpoint["scheduler_state"])
+            print(f"  Resumed at epoch {start_epoch}, best IoU={best_iou:.4f}")
+
+    for epoch in range(start_epoch, epochs):
         t0 = time.time()
 
         # --- Train ---
@@ -443,6 +458,8 @@ def train_class(
             best_iou = eval_iou
             torch.save({
                 "state_dict": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict(),
                 "cls_id": cls_id,
                 "cls_name": cls_name,
                 "arch": arch,
