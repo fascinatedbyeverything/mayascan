@@ -24,6 +24,39 @@ V2_MODEL_DIR = Path(__file__).parent / "models"
 # Temp directory — use external drive if available
 TMPDIR = os.environ.get("TMPDIR", tempfile.gettempdir())
 
+# HuggingFace model repo for auto-download
+HF_MODEL_REPO = os.environ.get("MAYASCAN_HF_REPO", "fascinated23/mayascan")
+
+
+def _ensure_models() -> None:
+    """Auto-download models from HuggingFace if not present locally."""
+    v2_models = discover_v2_models(str(V2_MODEL_DIR))
+    if v2_models:
+        return  # Models already present
+
+    try:
+        from huggingface_hub import hf_hub_download, list_repo_files
+
+        V2_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        files = list_repo_files(HF_MODEL_REPO)
+        model_files = [f for f in files if f.endswith(".pth")]
+
+        for mf in model_files:
+            dest = V2_MODEL_DIR / os.path.basename(mf)
+            if not dest.exists():
+                print(f"Downloading {mf} from {HF_MODEL_REPO}...")
+                hf_hub_download(
+                    repo_id=HF_MODEL_REPO,
+                    filename=mf,
+                    local_dir=str(V2_MODEL_DIR),
+                )
+    except Exception as e:
+        print(f"Could not auto-download models: {e}")
+
+
+# Auto-download models on import
+_ensure_models()
+
 # ---------------------------------------------------------------------------
 # Class colours (RGBA)
 # ---------------------------------------------------------------------------

@@ -200,7 +200,7 @@ def cmd_info(args: argparse.Namespace) -> None:
         print(f"\nv1 multi-class model: {os.path.basename(v1_path)} ({size_mb:.0f} MB)")
 
 
-HF_REPO_ID = "fascinatedbyeverything/mayascan"
+HF_REPO_ID = "fascinated23/mayascan"
 
 
 def cmd_download(args: argparse.Namespace) -> None:
