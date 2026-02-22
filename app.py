@@ -14,8 +14,11 @@ import numpy as np
 from scipy.ndimage import label
 
 import mayascan
-from mayascan.detect import CLASS_NAMES
+from mayascan.detect import CLASS_NAMES, discover_v2_models, run_detection_v2
 from mayascan.export import to_csv, to_geojson, to_geotiff
+
+# Default model directory for v2 per-class models
+V2_MODEL_DIR = Path(__file__).parent / "models"
 
 # ---------------------------------------------------------------------------
 # Class colours (RGBA)
@@ -140,8 +143,16 @@ def process_upload(
     # Convert (3, H, W) float32 [0,1] to (H, W, 3) uint8 for display
     viz_rgb = (np.transpose(viz, (1, 2, 0)) * 255).clip(0, 255).astype(np.uint8)
 
-    # --- Detect ---
-    result = mayascan.detect(viz, confidence_threshold=confidence_threshold)
+    # --- Detect (v2 per-class models if available, else v1 multi-class) ---
+    v2_models = discover_v2_models(str(V2_MODEL_DIR))
+    if v2_models:
+        result = run_detection_v2(
+            viz,
+            model_dir=str(V2_MODEL_DIR),
+            confidence_threshold=confidence_threshold,
+        )
+    else:
+        result = mayascan.detect(viz, confidence_threshold=confidence_threshold)
 
     # --- Colorize detection ---
     overlay = colorize_classes(result.classes)
@@ -267,12 +278,12 @@ def build_demo() -> gr.Blocks:
 
         gr.Markdown(
             "---\n"
-            "**MayaScan** v0.1.0 | "
-            "[GitHub](https://github.com/chrisholmes/mayascan) | "
+            "**MayaScan** v0.2.0 | "
+            "[GitHub](https://github.com/fascinatedbyeverything/mayascan) | "
             "Built with [Gradio](https://gradio.app)\n\n"
             "Archaeological LiDAR feature detection for Maya archaeology. "
-            "Model architecture: U-Net with ResNet-34 encoder trained on "
-            "semantic segmentation of buildings, platforms, and aguadas."
+            "Per-class binary segmentation (DeepLabV3+ ResNet-101) with "
+            "test-time augmentation for buildings, platforms, and aguadas."
         )
 
     return demo

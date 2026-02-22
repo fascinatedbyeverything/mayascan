@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import torch
 
 from mayascan.detect import CLASS_NAMES, DetectionResult, run_detection
 
@@ -67,10 +68,13 @@ class TestRunDetection:
         rng = np.random.default_rng(123)
         viz = rng.random((3, 480, 480)).astype(np.float32)
 
+        # Fix random seed so both calls create identical model weights
+        torch.manual_seed(0)
         result_low = run_detection(
             viz, model_path=None, tile_size=480, overlap=0.0,
             confidence_threshold=0.0, device="cpu",
         )
+        torch.manual_seed(0)
         result_high = run_detection(
             viz, model_path=None, tile_size=480, overlap=0.0,
             confidence_threshold=0.99, device="cpu",

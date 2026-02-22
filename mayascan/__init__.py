@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import numpy as np
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from mayascan.detect import DetectionResult
 from mayascan.visualize import compute_visualizations as _compute_visualizations
 from mayascan.detect import run_detection as _run_detection
+from mayascan.detect import run_detection_v2 as _run_detection_v2
+from mayascan.detect import discover_v2_models
 
 __all__ = [
     "__version__",
     "DetectionResult",
     "visualize",
     "detect",
+    "detect_v2",
+    "discover_v2_models",
     "process_dem",
 ]
 
@@ -62,6 +66,38 @@ def detect(
         visualization,
         model_path=model_path,
         confidence_threshold=confidence_threshold,
+    )
+
+
+def detect_v2(
+    visualization: np.ndarray,
+    model_dir: str = "models",
+    confidence_threshold: float = 0.5,
+    use_tta: bool = True,
+) -> DetectionResult:
+    """Run v2 per-class binary model inference with TTA.
+
+    Parameters
+    ----------
+    visualization : np.ndarray
+        Input raster with shape ``(C, H, W)`` where *C* is typically 3.
+    model_dir : str
+        Directory containing per-class model files.
+    confidence_threshold : float
+        Pixels below this confidence are reset to background.
+    use_tta : bool
+        If True, use 8-fold test-time augmentation.
+
+    Returns
+    -------
+    DetectionResult
+        Dataclass with ``classes``, ``confidence``, and ``class_names``.
+    """
+    return _run_detection_v2(
+        visualization,
+        model_dir=model_dir,
+        confidence_threshold=confidence_threshold,
+        use_tta=use_tta,
     )
 
 
