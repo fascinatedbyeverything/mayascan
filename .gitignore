@@ -11,3 +11,9 @@ build/
 *.tif
 *.las
 *.laz
+*.npy
+chactun_data/
+models/
+train_v2.log
+.cache/
+.pytest_cache/

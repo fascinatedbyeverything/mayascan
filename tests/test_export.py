@@ -6,8 +6,8 @@ import json
 import numpy as np
 import pytest
 
-from mayascan.detect import CLASS_NAMES, DetectionResult
-from mayascan.export import to_csv, to_geojson, to_geotiff
+from mayascan.detect import CLASS_NAMES, DetectionResult, GeoInfo
+from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
 
 
 @pytest.fixture
@@ -111,3 +111,99 @@ class TestToGeotiff:
 
         assert result_path.exists()
         assert result_path.stat().st_size > 0
+
+
+class TestGeoExport:
+    """Tests for georeferenced export."""
+
+    def test_csv_with_geo(self, tmp_path):
+        """CSV includes geo_x, geo_y columns when GeoInfo is present."""
+        classes = np.zeros((50, 50), dtype=np.int64)
+        confidence = np.full((50, 50), 0.1, dtype=np.float32)
+        classes[10:20, 10:20] = 1
+        confidence[10:20, 10:20] = 0.9
+
+        geo = GeoInfo(
+            crs="EPSG:32616",
+            transform=(0.5, 0.0, 500000.0, 0.0, -0.5, 2000000.0),
+            resolution=0.5,
+        )
+        result = DetectionResult(
+            classes=classes, confidence=confidence,
+            class_names=dict(CLASS_NAMES), geo=geo,
+        )
+
+        csv_path = to_csv(result, tmp_path / "geo.csv")
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        assert len(rows) >= 1
+        assert "geo_x" in reader.fieldnames
+        assert "geo_y" in reader.fieldnames
+        # geo_x should be near 500000 + 14.5 * 0.5 = 500007.25
+        gx = float(rows[0]["geo_x"])
+        assert 500000 < gx < 500050
+
+    def test_geojson_with_geo(self, tmp_path):
+        """GeoJSON includes CRS and real-world coordinates."""
+        classes = np.zeros((50, 50), dtype=np.int64)
+        confidence = np.full((50, 50), 0.1, dtype=np.float32)
+        classes[10:20, 10:20] = 1
+        confidence[10:20, 10:20] = 0.9
+
+        geo = GeoInfo(
+            crs="EPSG:32616",
+            transform=(0.5, 0.0, 500000.0, 0.0, -0.5, 2000000.0),
+            resolution=0.5,
+        )
+        result = DetectionResult(
+            classes=classes, confidence=confidence,
+            class_names=dict(CLASS_NAMES), geo=geo,
+        )
+
+        geojson_path = to_geojson(result, tmp_path / "geo.geojson")
+        with open(geojson_path) as f:
+            data = json.load(f)
+
+        assert "crs" in data
+        assert data["crs"]["properties"]["name"] == "EPSG:32616"
+        assert len(data["features"]) >= 1
+
+        # Coordinates should be in map space (near 500000)
+        coords = data["features"][0]["geometry"]["coordinates"][0]
+        xs = [c[0] for c in coords]
+        assert all(x > 500000 for x in xs)
+
+    def test_confidence_geotiff(self, detection_result, tmp_path):
+        """Confidence GeoTIFF is written."""
+        conf_path = to_confidence_geotiff(
+            detection_result, tmp_path / "conf.tif"
+        )
+        assert conf_path.exists()
+        assert conf_path.stat().st_size > 0
+
+    def test_geojson_contours(self, tmp_path):
+        """GeoJSON uses convex hull contours for features with enough pixels."""
+        classes = np.zeros((100, 100), dtype=np.int64)
+        confidence = np.full((100, 100), 0.1, dtype=np.float32)
+        # Create a circular-ish blob
+        for r in range(30, 70):
+            for c in range(30, 70):
+                if (r - 50) ** 2 + (c - 50) ** 2 < 400:
+                    classes[r, c] = 1
+                    confidence[r, c] = 0.9
+
+        result = DetectionResult(
+            classes=classes, confidence=confidence,
+            class_names=dict(CLASS_NAMES),
+        )
+
+        geojson_path = to_geojson(result, tmp_path / "contour.geojson")
+        with open(geojson_path) as f:
+            data = json.load(f)
+
+        assert len(data["features"]) == 1
+        coords = data["features"][0]["geometry"]["coordinates"][0]
+        # Convex hull should have more than 4 points (not just a bounding box)
+        assert len(coords) > 4

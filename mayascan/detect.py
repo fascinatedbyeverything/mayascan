@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import segmentation_models_pytorch as smp
@@ -34,6 +35,29 @@ V2_CLASSES = {1: "building", 2: "platform", 3: "aguada"}
 
 
 @dataclass
+class GeoInfo:
+    """Georeferencing information extracted from an input raster.
+
+    Attributes
+    ----------
+    crs : str or None
+        Coordinate reference system (e.g. ``"EPSG:32616"``).
+    transform : tuple or None
+        Affine transform as a 6-element tuple ``(a, b, c, d, e, f)``
+        mapping pixel coordinates to map coordinates.
+    bounds : tuple or None
+        Bounding box ``(left, bottom, right, top)`` in map coordinates.
+    resolution : float
+        Pixel size in map units (metres). Falls back to 0.5 if unknown.
+    """
+
+    crs: str | None = None
+    transform: tuple[float, ...] | None = None
+    bounds: tuple[float, float, float, float] | None = None
+    resolution: float = 0.5
+
+
+@dataclass
 class DetectionResult:
     """Result of running detection on a visualization raster.
 
@@ -45,11 +69,14 @@ class DetectionResult:
         (H, W) float array of per-pixel confidence values in [0, 1].
     class_names : dict[int, str]
         Mapping from class index to human-readable name.
+    geo : GeoInfo or None
+        Georeferencing from the source raster, if available.
     """
 
     classes: np.ndarray
     confidence: np.ndarray
     class_names: dict[int, str] = field(default_factory=lambda: dict(CLASS_NAMES))
+    geo: GeoInfo | None = None
 
 
 def _select_device(device: torch.device | str | None) -> torch.device:

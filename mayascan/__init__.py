@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
-from mayascan.detect import DetectionResult
+from mayascan.detect import DetectionResult, GeoInfo
 from mayascan.visualize import compute_visualizations as _compute_visualizations
 from mayascan.detect import run_detection as _run_detection
 from mayascan.detect import run_detection_v2 as _run_detection_v2
@@ -15,12 +17,92 @@ from mayascan.detect import discover_v2_models
 __all__ = [
     "__version__",
     "DetectionResult",
+    "GeoInfo",
     "visualize",
     "detect",
     "detect_v2",
     "discover_v2_models",
     "process_dem",
+    "read_raster",
+    "read_geo_info",
 ]
+
+
+def read_geo_info(path: str | Path) -> GeoInfo:
+    """Read georeferencing metadata from a raster file.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to a GeoTIFF or other rasterio-supported file.
+
+    Returns
+    -------
+    GeoInfo
+        CRS, affine transform, bounds, and resolution.
+        Fields are None if rasterio is unavailable or the file
+        lacks georeferencing.
+    """
+    path = Path(path)
+    try:
+        import rasterio
+
+        with rasterio.open(str(path)) as src:
+            crs = str(src.crs) if src.crs else None
+            transform = tuple(src.transform)[:6] if src.transform else None
+            bounds = tuple(src.bounds) if src.bounds else None
+            res = src.res[0] if src.res else 0.5
+            return GeoInfo(crs=crs, transform=transform, bounds=bounds, resolution=res)
+    except (ImportError, Exception):
+        return GeoInfo()
+
+
+def read_raster(path: str | Path) -> tuple[np.ndarray, GeoInfo]:
+    """Load a raster file and its georeferencing metadata.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to a GeoTIFF (.tif), or NumPy (.npy) file.
+
+    Returns
+    -------
+    data : np.ndarray
+        Raster data as float32. For single-band: (H, W). For multi-band: (C, H, W).
+    geo : GeoInfo
+        Georeferencing metadata (CRS, transform, bounds, resolution).
+    """
+    path = Path(path)
+    suffix = path.suffix.lower()
+    geo = GeoInfo()
+
+    if suffix in (".tif", ".tiff"):
+        try:
+            import rasterio
+
+            with rasterio.open(str(path)) as src:
+                if src.crs:
+                    geo.crs = str(src.crs)
+                if src.transform:
+                    geo.transform = tuple(src.transform)[:6]
+                if src.bounds:
+                    geo.bounds = tuple(src.bounds)
+                if src.res:
+                    geo.resolution = src.res[0]
+                if src.count == 1:
+                    data = src.read(1).astype(np.float32)
+                else:
+                    data = src.read().astype(np.float32)
+        except ImportError:
+            from PIL import Image
+
+            data = np.array(Image.open(str(path)), dtype=np.float32)
+    elif suffix == ".npy":
+        data = np.load(str(path)).astype(np.float32)
+    else:
+        raise ValueError(f"Unsupported format: {suffix}. Use .tif or .npy")
+
+    return data, geo
 
 
 def visualize(dem: np.ndarray, resolution: float = 0.5) -> np.ndarray:

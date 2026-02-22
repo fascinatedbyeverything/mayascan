@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import mayascan
-from mayascan.detect import DetectionResult
+from mayascan.detect import DetectionResult, GeoInfo
 
 
 class TestPublicAPI:
@@ -58,3 +58,35 @@ class TestPublicAPI:
         assert result.confidence.shape == (200, 200)
         assert isinstance(result.class_names, dict)
         assert 0 in result.class_names
+
+    def test_geo_info_defaults(self):
+        """GeoInfo has sensible defaults."""
+        geo = GeoInfo()
+        assert geo.crs is None
+        assert geo.transform is None
+        assert geo.bounds is None
+        assert geo.resolution == 0.5
+
+    def test_detection_result_has_geo(self):
+        """DetectionResult can carry GeoInfo."""
+        classes = np.zeros((10, 10), dtype=np.int64)
+        confidence = np.ones((10, 10), dtype=np.float32)
+        geo = GeoInfo(crs="EPSG:32616", resolution=0.5)
+
+        result = DetectionResult(
+            classes=classes,
+            confidence=confidence,
+            geo=geo,
+        )
+        assert result.geo is not None
+        assert result.geo.crs == "EPSG:32616"
+
+    def test_read_raster_npy(self, tmp_path):
+        """read_raster loads .npy files."""
+        arr = np.random.default_rng(0).random((100, 100)).astype(np.float32)
+        npy_path = tmp_path / "test.npy"
+        np.save(str(npy_path), arr)
+
+        data, geo = mayascan.read_raster(npy_path)
+        assert data.shape == (100, 100)
+        assert geo.crs is None

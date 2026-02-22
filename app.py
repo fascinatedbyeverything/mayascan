@@ -1,11 +1,12 @@
 """MayaScan Gradio web interface for archaeological LiDAR feature detection.
 
-Upload a DEM (GeoTIFF or .npy), visualize SVF / openness / slope, run
-U-Net segmentation, and download results as CSV, GeoJSON, or GeoTIFF.
+Upload a DEM (GeoTIFF or .npy) or pre-computed visualization tile,
+run deep learning segmentation, and explore results interactively.
 """
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -14,95 +15,49 @@ import numpy as np
 from scipy.ndimage import label
 
 import mayascan
-from mayascan.detect import CLASS_NAMES, discover_v2_models, run_detection_v2
-from mayascan.export import to_csv, to_geojson, to_geotiff
+from mayascan.detect import CLASS_NAMES, GeoInfo, discover_v2_models, run_detection_v2
+from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
 
 # Default model directory for v2 per-class models
 V2_MODEL_DIR = Path(__file__).parent / "models"
+
+# Temp directory — use external drive if available
+TMPDIR = os.environ.get("TMPDIR", tempfile.gettempdir())
 
 # ---------------------------------------------------------------------------
 # Class colours (RGBA)
 # ---------------------------------------------------------------------------
 
-COLORS: dict[int, list[int]] = {
-    0: [0, 0, 0, 0],           # background — transparent
-    1: [255, 60, 60, 180],     # building — red
-    2: [255, 220, 50, 180],    # platform — yellow
-    3: [50, 120, 255, 180],    # aguada — blue
+CLASS_COLORS: dict[int, tuple[int, int, int, int]] = {
+    0: (0, 0, 0, 0),           # background — transparent
+    1: (255, 60, 60, 180),     # building — red
+    2: (60, 200, 60, 180),     # platform — green
+    3: (50, 120, 255, 180),    # aguada — blue
 }
 
 
 def colorize_classes(classes: np.ndarray) -> np.ndarray:
-    """Convert a (H, W) class-index map to an RGBA image.
-
-    Parameters
-    ----------
-    classes : np.ndarray
-        Integer array of shape (H, W) with values in ``COLORS.keys()``.
-
-    Returns
-    -------
-    np.ndarray
-        uint8 RGBA image of shape (H, W, 4).
-    """
+    """Convert a (H, W) class-index map to an RGBA image."""
     h, w = classes.shape
     rgba = np.zeros((h, w, 4), dtype=np.uint8)
-    for class_id, color in COLORS.items():
+    for class_id, color in CLASS_COLORS.items():
         mask = classes == class_id
         rgba[mask] = color
     return rgba
 
 
-# ---------------------------------------------------------------------------
-# DEM loading
-# ---------------------------------------------------------------------------
+def blend_overlay(
+    base_rgb: np.ndarray,
+    overlay_rgba: np.ndarray,
+    opacity: float = 0.6,
+) -> np.ndarray:
+    """Blend a detection overlay onto a visualization base image."""
+    base = base_rgb.astype(np.float32) / 255.0
+    overlay = overlay_rgba[:, :, :3].astype(np.float32) / 255.0
+    alpha = (overlay_rgba[:, :, 3].astype(np.float32) / 255.0 * opacity)[:, :, np.newaxis]
 
-def load_dem_from_file(file_path: str) -> np.ndarray:
-    """Load a DEM from a file path.
-
-    Supports GeoTIFF (.tif / .tiff) and NumPy (.npy) formats.
-
-    Parameters
-    ----------
-    file_path : str
-        Path to the DEM file.
-
-    Returns
-    -------
-    np.ndarray
-        2-D float32 elevation array.
-
-    Raises
-    ------
-    ValueError
-        If the file format is not supported.
-    """
-    path = Path(file_path)
-    suffix = path.suffix.lower()
-
-    if suffix in (".tif", ".tiff"):
-        try:
-            import rasterio  # type: ignore[import-untyped]
-
-            with rasterio.open(str(path)) as src:
-                dem = src.read(1).astype(np.float32)
-        except ImportError:
-            from PIL import Image  # noqa: E402
-
-            img = Image.open(str(path))
-            dem = np.array(img, dtype=np.float32)
-        return dem
-
-    if suffix == ".npy":
-        dem = np.load(str(path)).astype(np.float32)
-        if dem.ndim != 2:
-            raise ValueError(f"Expected 2-D array in .npy file, got shape {dem.shape}")
-        return dem
-
-    raise ValueError(
-        f"Unsupported file format '{suffix}'. "
-        "Please upload a .tif, .tiff, or .npy file."
-    )
+    blended = base * (1 - alpha) + overlay * alpha
+    return (blended * 255).clip(0, 255).astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -113,37 +68,39 @@ def process_upload(
     file: str,
     confidence_threshold: float,
     resolution: float,
-) -> tuple[np.ndarray, np.ndarray, list[str], str]:
+    opacity: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], str]:
     """Process an uploaded DEM file through the full MayaScan pipeline.
-
-    Parameters
-    ----------
-    file : str
-        Path to the uploaded file (Gradio provides this as a string).
-    confidence_threshold : float
-        Minimum confidence for non-background predictions.
-    resolution : float
-        Pixel size in metres.
 
     Returns
     -------
     tuple
-        (viz_rgb, overlay, export_files, stats)
-        - viz_rgb: uint8 RGB image (H, W, 3) of the visualization stack
-        - overlay: uint8 RGBA image (H, W, 4) of colorized detection classes
-        - export_files: list of file paths for download
-        - stats: human-readable statistics string
+        (viz_rgb, overlay, blended, export_files, stats)
     """
-    # --- Load DEM ---
-    dem = load_dem_from_file(file)
+    # --- Load with georeferencing ---
+    data, geo = mayascan.read_raster(file)
 
-    # --- Visualize ---
-    viz = mayascan.visualize(dem, resolution=resolution)  # (3, H, W) float32
+    if geo.crs:
+        resolution = geo.resolution
 
-    # Convert (3, H, W) float32 [0,1] to (H, W, 3) uint8 for display
+    # Detect pre-computed visualization vs raw DEM
+    is_viz = False
+    if data.ndim == 3 and data.shape[-1] == 3:
+        is_viz = True
+        viz = (data / 255.0).transpose(2, 0, 1).astype(np.float32)
+    elif data.ndim == 3 and data.shape[0] == 3:
+        is_viz = True
+        viz = data / 255.0 if data.max() > 1.0 else data
+    else:
+        dem = data if data.ndim == 2 else data[0] if data.ndim == 3 else data
+
+    if not is_viz:
+        viz = mayascan.visualize(dem, resolution=resolution)
+
+    # Convert viz to RGB display
     viz_rgb = (np.transpose(viz, (1, 2, 0)) * 255).clip(0, 255).astype(np.uint8)
 
-    # --- Detect (v2 per-class models if available, else v1 multi-class) ---
+    # --- Detect ---
     v2_models = discover_v2_models(str(V2_MODEL_DIR))
     if v2_models:
         result = run_detection_v2(
@@ -154,11 +111,18 @@ def process_upload(
     else:
         result = mayascan.detect(viz, confidence_threshold=confidence_threshold)
 
+    result.geo = geo
+
     # --- Colorize detection ---
     overlay = colorize_classes(result.classes)
+    blended = blend_overlay(viz_rgb, overlay, opacity=opacity)
 
-    # --- Feature statistics ---
-    stats_lines = ["MayaScan Detection Results", "=" * 30, ""]
+    # --- Statistics ---
+    stats_lines = [
+        "MayaScan Detection Results",
+        "=" * 35,
+        "",
+    ]
 
     total_features = 0
     for class_id, class_name in CLASS_NAMES.items():
@@ -166,36 +130,42 @@ def process_upload(
             continue
         mask = result.classes == class_id
         if not mask.any():
-            stats_lines.append(f"{class_name.capitalize():>10s}: 0 features")
+            stats_lines.append(f"  {class_name.capitalize():>10s}: 0 features")
             continue
         labeled_array, num_features = label(mask)
         pixel_count = int(mask.sum())
         area_m2 = pixel_count * resolution * resolution
+        avg_conf = float(result.confidence[mask].mean())
         stats_lines.append(
-            f"{class_name.capitalize():>10s}: {num_features} features "
-            f"({pixel_count} px, {area_m2:.1f} m\u00b2)"
+            f"  {class_name.capitalize():>10s}: {num_features} features "
+            f"({area_m2:.0f} m\u00b2, conf: {avg_conf:.2f})"
         )
         total_features += num_features
 
-    stats_lines.append("")
-    stats_lines.append(f"{'Total':>10s}: {total_features} features detected")
-    stats_lines.append(f"{'DEM size':>10s}: {dem.shape[0]} x {dem.shape[1]} px")
-    stats_lines.append(f"{'Resolution':>10s}: {resolution} m/px")
-    stats_lines.append(f"{'Confidence':>10s}: >= {confidence_threshold}")
+    h, w = result.classes.shape
+    stats_lines.extend([
+        "",
+        f"  {'Total':>10s}: {total_features} features",
+        f"  {'Size':>10s}: {h} x {w} px",
+        f"  {'Resolution':>10s}: {resolution:.4f} m/px",
+        f"  {'Coverage':>10s}: {w * resolution:.0f} x {h * resolution:.0f} m",
+        f"  {'Threshold':>10s}: >= {confidence_threshold}",
+    ])
+    if geo.crs:
+        stats_lines.append(f"  {'CRS':>10s}: {geo.crs}")
+
     stats_text = "\n".join(stats_lines)
 
     # --- Export files ---
-    tmpdir = tempfile.mkdtemp(prefix="mayascan_")
-    csv_path = to_csv(result, Path(tmpdir) / "detections.csv", pixel_size=resolution)
-    geojson_path = to_geojson(
-        result, Path(tmpdir) / "detections.geojson", pixel_size=resolution
-    )
-    geotiff_path = to_geotiff(
-        result, Path(tmpdir) / "detections.tif", pixel_size=resolution
-    )
-    export_files = [str(csv_path), str(geojson_path), str(geotiff_path)]
+    tmpdir = tempfile.mkdtemp(prefix="mayascan_", dir=TMPDIR)
+    stem = Path(file).stem
+    csv_path = to_csv(result, Path(tmpdir) / f"{stem}_detections.csv", pixel_size=resolution)
+    geojson_path = to_geojson(result, Path(tmpdir) / f"{stem}_detections.geojson", pixel_size=resolution)
+    geotiff_path = to_geotiff(result, Path(tmpdir) / f"{stem}_detections.tif", pixel_size=resolution)
+    conf_path = to_confidence_geotiff(result, Path(tmpdir) / f"{stem}_confidence.tif", pixel_size=resolution)
+    export_files = [str(csv_path), str(geojson_path), str(geotiff_path), str(conf_path)]
 
-    return viz_rgb, overlay, export_files, stats_text
+    return viz_rgb, overlay, blended, export_files, stats_text
 
 
 # ---------------------------------------------------------------------------
@@ -203,68 +173,94 @@ def process_upload(
 # ---------------------------------------------------------------------------
 
 def build_demo() -> gr.Blocks:
-    """Construct and return the Gradio Blocks application."""
+    """Construct the Gradio application."""
+
+    css = """
+    .main-title { text-align: center; margin-bottom: 0.5em; }
+    .subtitle { text-align: center; color: #666; margin-top: 0; }
+    """
+
     with gr.Blocks(
-        title="MayaScan",
+        title="MayaScan — Archaeological LiDAR Feature Detection",
         theme=gr.themes.Soft(),
+        css=css,
     ) as demo:
-        gr.Markdown(
-            "# MayaScan\n"
-            "**Open-source archaeological feature detection from LiDAR DEMs.**\n\n"
-            "Upload a digital elevation model to visualize terrain features "
-            "(sky-view factor, openness, slope) and detect ancient Maya "
-            "structures using deep learning segmentation."
+        gr.HTML(
+            '<h1 class="main-title">MayaScan</h1>'
+            '<p class="subtitle">Open-source archaeological feature detection from LiDAR DEMs</p>'
         )
 
         with gr.Row():
             # --- Left column: inputs ---
             with gr.Column(scale=1):
                 file_input = gr.File(
-                    label="Upload DEM",
+                    label="Upload DEM or Visualization",
                     file_types=[".tif", ".tiff", ".npy"],
                     type="filepath",
                 )
                 confidence_slider = gr.Slider(
-                    minimum=0.0,
-                    maximum=1.0,
+                    minimum=0.1,
+                    maximum=0.95,
                     value=0.5,
                     step=0.05,
                     label="Confidence Threshold",
-                    info="Minimum confidence for non-background detections.",
+                    info="Higher = fewer but more confident detections.",
                 )
                 resolution_input = gr.Number(
                     value=0.5,
                     label="Resolution (m/px)",
-                    info="Ground sampling distance of the DEM in metres.",
-                    precision=2,
+                    info="Auto-detected from GeoTIFFs. Set manually for .npy.",
+                    precision=4,
+                )
+                opacity_slider = gr.Slider(
+                    minimum=0.1,
+                    maximum=1.0,
+                    value=0.6,
+                    step=0.05,
+                    label="Overlay Opacity",
                 )
                 detect_btn = gr.Button(
                     "Detect Structures",
                     variant="primary",
+                    size="lg",
+                )
+
+                gr.Markdown(
+                    "### Legend\n"
+                    "- **Red**: Buildings / mounds\n"
+                    "- **Green**: Platforms\n"
+                    "- **Blue**: Aguadas (reservoirs)\n"
                 )
 
             # --- Right column: outputs ---
-            with gr.Column(scale=2):
+            with gr.Column(scale=3):
                 with gr.Tabs():
+                    with gr.TabItem("Overlay"):
+                        blended_image = gr.Image(
+                            label="Detections overlaid on visualization",
+                            type="numpy",
+                            interactive=False,
+                        )
                     with gr.TabItem("Visualization"):
                         viz_image = gr.Image(
                             label="SVF / Openness / Slope",
                             type="numpy",
                             interactive=False,
                         )
-                    with gr.TabItem("Detection Results"):
+                    with gr.TabItem("Detection Mask"):
                         det_image = gr.Image(
-                            label="Detected Features",
+                            label="Raw detection classes",
                             type="numpy",
                             interactive=False,
                         )
+
                 stats_box = gr.Textbox(
                     label="Statistics",
-                    lines=10,
+                    lines=12,
                     interactive=False,
                 )
                 download_files = gr.File(
-                    label="Download Results",
+                    label="Download Results (CSV, GeoJSON, GeoTIFF, Confidence)",
                     file_count="multiple",
                     interactive=False,
                 )
@@ -272,18 +268,19 @@ def build_demo() -> gr.Blocks:
         # --- Wire up the button ---
         detect_btn.click(
             fn=process_upload,
-            inputs=[file_input, confidence_slider, resolution_input],
-            outputs=[viz_image, det_image, download_files, stats_box],
+            inputs=[file_input, confidence_slider, resolution_input, opacity_slider],
+            outputs=[viz_image, det_image, blended_image, download_files, stats_box],
         )
 
         gr.Markdown(
             "---\n"
-            "**MayaScan** v0.2.0 | "
+            f"**MayaScan** v{mayascan.__version__} | "
             "[GitHub](https://github.com/fascinatedbyeverything/mayascan) | "
+            "[Models](https://huggingface.co/fascinatedbyeverything/mayascan) | "
             "Built with [Gradio](https://gradio.app)\n\n"
-            "Archaeological LiDAR feature detection for Maya archaeology. "
             "Per-class binary segmentation (DeepLabV3+ ResNet-101) with "
-            "test-time augmentation for buildings, platforms, and aguadas."
+            "test-time augmentation. Detects ancient Maya buildings, "
+            "platforms, and aguadas from LiDAR-derived terrain visualizations."
         )
 
     return demo
