@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+*.pth
+*.pt
+.ipynb_checkpoints/
+.env
+*.tif
+*.las
+*.laz
