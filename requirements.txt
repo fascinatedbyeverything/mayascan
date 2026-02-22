@@ -1,0 +1,8 @@
+torch
+torchvision
+segmentation-models-pytorch
+scipy
+numpy
+Pillow
+tqdm
+gradio
