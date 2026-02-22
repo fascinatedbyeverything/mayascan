@@ -26,10 +26,14 @@ from tqdm import tqdm
 from mayascan.config import (
     BATCH_SIZE,
     CONFIDENCE_THRESHOLD,
+    DINOV2_TILE_SIZE,
     EPOCHS,
     FOCAL_ALPHA,
     FOCAL_GAMMA,
+    FOUNDATION_ARCHS,
     LEARNING_RATE,
+    LORA_ALPHA,
+    LORA_RANK,
     MIN_BLOB_SIZE,
     V2_ARCH,
     V2_CLASSES,
@@ -44,6 +48,10 @@ def _build_model(
     encoder: str = V2_ENCODER,
     in_channels: int = 3,
     classes: int = 1,
+    use_lora: bool = True,
+    lora_rank: int = LORA_RANK,
+    lora_alpha: int = LORA_ALPHA,
+    frozen_encoder: bool = True,
 ) -> nn.Module:
     """Create a segmentation model.
 
@@ -51,20 +59,46 @@ def _build_model(
     ----------
     arch : str
         Architecture name: ``"deeplabv3plus"``, ``"unetplusplus"``, ``"unet"``,
-        ``"segformer"``, ``"upernet"``, ``"manet"``, ``"fpn"``.
+        ``"segformer"``, ``"upernet"``, ``"manet"``, ``"fpn"``, ``"dinov2"``.
     encoder : str
-        Encoder backbone name (e.g. ``"resnet101"``, ``"efficientnet-b5"``,
-        ``"mit_b3"``).
+        Encoder backbone name (e.g. ``"resnet101"``, ``"dinov2-large"``).
     in_channels : int
         Number of input channels.
     classes : int
         Number of output classes.
+    use_lora : bool
+        Enable LoRA fine-tuning (foundation models only).
+    lora_rank : int
+        LoRA rank (foundation models only).
+    lora_alpha : int
+        LoRA alpha (foundation models only).
+    frozen_encoder : bool
+        Freeze encoder weights (foundation models only).
 
     Returns
     -------
     nn.Module
         Segmentation model.
     """
+    # Foundation model path
+    if arch == "dinov2":
+        from mayascan.models.dinov2 import DINOV2_MODELS, DINOv2Segmenter
+
+        if encoder not in DINOV2_MODELS:
+            raise ValueError(
+                f"Unknown DINOv2 encoder: {encoder}. "
+                f"Choose from {list(DINOV2_MODELS)}"
+            )
+        return DINOv2Segmenter(
+            encoder_name=encoder,
+            use_lora=use_lora,
+            lora_rank=lora_rank,
+            lora_alpha=lora_alpha,
+            frozen_encoder=frozen_encoder,
+            classes=classes,
+        )
+
+    # smp path
     import segmentation_models_pytorch as smp
 
     builders = {
@@ -224,6 +258,12 @@ def train_class(
     num_workers: int = 4,
     use_amp: bool = False,
     loss_type: str = "focal_dice",
+    grad_accum_steps: int = 1,
+    use_lora: bool = True,
+    lora_rank: int = LORA_RANK,
+    lora_alpha: int = LORA_ALPHA,
+    frozen_encoder: bool = True,
+    tile_size: int | None = None,
 ) -> tuple[float, str]:
     """Train a binary segmentation model for a single class.
 
@@ -263,9 +303,17 @@ def train_class(
     tuple of (float, str)
         Best IoU achieved and path to saved checkpoint.
     """
+    # Auto-set tile size for foundation models
+    is_foundation = arch in FOUNDATION_ARCHS
+    if tile_size is None and is_foundation:
+        tile_size = DINOV2_TILE_SIZE
+
     print(f"\n{'=' * 60}")
     print(f"Training binary model: {cls_name}")
     print(f"Architecture: {arch} ({encoder}), Epochs: {epochs}, AMP: {use_amp}")
+    if is_foundation:
+        print(f"Foundation model: LoRA={use_lora} (rank={lora_rank}), "
+              f"tile_size={tile_size}")
     print(f"{'=' * 60}\n")
 
     # Datasets
@@ -295,13 +343,25 @@ def train_class(
     )
 
     # Model
-    model = _build_model(arch, encoder).to(device)
+    model = _build_model(
+        arch, encoder,
+        use_lora=use_lora, lora_rank=lora_rank,
+        lora_alpha=lora_alpha, frozen_encoder=frozen_encoder,
+    ).to(device)
 
     # Loss
     criterion = _make_criterion(loss_type)
 
-    # Optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    # Optimizer: only trainable params for foundation models
+    if is_foundation:
+        train_params = [p for p in model.parameters() if p.requires_grad]
+        optimizer = optim.AdamW(train_params, lr=lr, weight_decay=1e-4)
+        total = sum(p.numel() for p in model.parameters())
+        trainable = sum(p.numel() for p in train_params)
+        print(f"  Trainable params: {trainable:,} / {total:,} total "
+              f"({100 * trainable / total:.1f}%)")
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     # Warmup + cosine schedule
     def lr_lambda(epoch: int) -> float:
@@ -341,11 +401,22 @@ def train_class(
         # --- Train ---
         model.train()
         train_loss = 0.0
-        for images, masks in tqdm(
+        optimizer.zero_grad()
+        for batch_idx, (images, masks) in enumerate(tqdm(
             train_dl, desc=f"[{cls_name}] Epoch {epoch + 1}/{epochs}", leave=False
-        ):
+        )):
             images = images.to(device)
             masks = masks.to(device).unsqueeze(1)
+
+            # Resize tiles for foundation models (e.g. 480->518 for DINOv2)
+            if tile_size is not None and images.shape[-1] != tile_size:
+                images = torch.nn.functional.interpolate(
+                    images, size=(tile_size, tile_size), mode="bilinear",
+                    align_corners=False,
+                )
+                masks = torch.nn.functional.interpolate(
+                    masks, size=(tile_size, tile_size), mode="nearest",
+                )
 
             # CutMix: 30% of batches get a random rectangular patch swapped
             if np.random.rand() < 0.3 and images.shape[0] > 1:
@@ -362,26 +433,30 @@ def train_class(
                 images[:, :, y1:y2, x1:x2] = images[perm, :, y1:y2, x1:x2]
                 masks[:, :, y1:y2, x1:x2] = masks[perm, :, y1:y2, x1:x2]
 
-            optimizer.zero_grad()
             with torch.amp.autocast(
                 device_type=device if device in ("cuda", "cpu") else "cpu",
                 dtype=amp_dtype, enabled=use_amp,
             ):
                 logits = model(images)
-                loss = criterion(logits, masks)
+                loss = criterion(logits, masks) / grad_accum_steps
 
             if use_amp:
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
             else:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
 
-            train_loss += loss.item()
+            if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_dl):
+                if use_amp:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                optimizer.zero_grad()
+
+            train_loss += loss.item() * grad_accum_steps
 
         scheduler.step()
         avg_loss = train_loss / max(len(train_dl), 1)
@@ -393,11 +468,25 @@ def train_class(
 
         with torch.no_grad():
             for images, masks in val_dl:
+                # Resize for foundation models
+                val_images = images
+                if tile_size is not None and images.shape[-1] != tile_size:
+                    val_images = torch.nn.functional.interpolate(
+                        images, size=(tile_size, tile_size), mode="bilinear",
+                        align_corners=False,
+                    )
                 if use_tta and epoch >= epochs - 10:
-                    probs = predict_with_tta(model, images, device).squeeze(1).numpy()
+                    probs = predict_with_tta(model, val_images, device).squeeze(1).numpy()
                 else:
-                    logits = model(images.to(device))
+                    logits = model(val_images.to(device))
                     probs = torch.sigmoid(logits).squeeze(1).cpu().numpy()
+                # Resize probs back to original mask size if needed
+                if tile_size is not None and probs.shape[-1] != masks.shape[-1]:
+                    probs = torch.nn.functional.interpolate(
+                        torch.from_numpy(probs).unsqueeze(1),
+                        size=masks.shape[-2:], mode="bilinear",
+                        align_corners=False,
+                    ).squeeze(1).numpy()
 
                 masks_np = masks.numpy()
 
@@ -427,8 +516,7 @@ def train_class(
         eval_iou = mean_iou_pp if mean_iou_pp > 0 else mean_iou
         if eval_iou > best_iou:
             best_iou = eval_iou
-            torch.save(
-                {
+            ckpt = {
                     "state_dict": model.state_dict(),
                     "optimizer_state": optimizer.state_dict(),
                     "scheduler_state": scheduler.state_dict(),
@@ -437,9 +525,15 @@ def train_class(
                     "encoder": encoder,
                     "best_iou": best_iou,
                     "epoch": epoch + 1,
-                },
-                save_path,
-            )
+                }
+            if is_foundation:
+                    ckpt.update({
+                        "use_lora": use_lora,
+                        "lora_rank": lora_rank,
+                        "lora_alpha": lora_alpha,
+                        "frozen_encoder": frozen_encoder,
+                    })
+            torch.save(ckpt, save_path)
             print(f"  >>> Saved best {cls_name} model (IoU={best_iou:.4f})")
 
     print(f"\n{cls_name} training complete! Best IoU: {best_iou:.4f}")

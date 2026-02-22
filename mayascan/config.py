@@ -38,6 +38,25 @@ V2_ARCH: str = "deeplabv3plus"
 V2_ENCODER: str = "resnet101"
 
 # ---------------------------------------------------------------------------
+# Foundation model defaults
+# ---------------------------------------------------------------------------
+
+#: Default DINOv2 tile size (must be divisible by 14)
+DINOV2_TILE_SIZE: int = 518
+
+#: Foundation model architectures (not smp-based)
+FOUNDATION_ARCHS: set[str] = {"dinov2"}
+
+#: Default LoRA rank for foundation model fine-tuning
+LORA_RANK: int = 8
+
+#: Default LoRA alpha
+LORA_ALPHA: int = 16
+
+#: Foundation model learning rate (lower than smp default)
+FOUNDATION_LR: float = 1e-4
+
+# ---------------------------------------------------------------------------
 # Class definitions
 # ---------------------------------------------------------------------------
 

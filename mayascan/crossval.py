@@ -128,6 +128,12 @@ def train_fold(
     num_workers: int = 4,
     use_amp: bool = True,
     loss_type: str = "focal_dice",
+    grad_accum_steps: int = 1,
+    use_lora: bool = True,
+    lora_rank: int = 8,
+    lora_alpha: int = 16,
+    frozen_encoder: bool = True,
+    tile_size: int | None = None,
 ) -> tuple[float, str]:
     """Train a single fold model for a class.
 
@@ -177,13 +183,23 @@ def train_fold(
     from torch.utils.data import DataLoader
     from tqdm import tqdm
 
+    import torch.nn.functional as TF
+
+    from mayascan.config import DINOV2_TILE_SIZE, FOUNDATION_ARCHS
     from mayascan.data import BinarySegmentationDataset
     from mayascan.losses import FocalDiceLoss
     from mayascan.train import _build_model, predict_with_tta, compute_binary_iou, postprocess_mask
 
+    # Auto-set tile size for foundation models
+    is_foundation = arch in FOUNDATION_ARCHS
+    if tile_size is None and is_foundation:
+        tile_size = DINOV2_TILE_SIZE
+
     print(f"\n{'=' * 60}")
     print(f"Training {cls_name} — Fold {fold.fold}")
     print(f"Architecture: {arch} ({encoder}), Epochs: {epochs}")
+    if is_foundation:
+        print(f"Foundation model: LoRA={use_lora} (rank={lora_rank}), tile_size={tile_size}")
     print(f"AMP: {use_amp}, Train tiles: {len(fold.train_tiles)}, Val tiles: {len(fold.val_tiles)}")
     print(f"{'=' * 60}\n")
 
@@ -218,14 +234,24 @@ def train_fold(
     )
 
     # Model
-    model = _build_model(arch, encoder).to(device)
+    model = _build_model(
+        arch, encoder,
+        use_lora=use_lora, lora_rank=lora_rank, lora_alpha=lora_alpha,
+        frozen_encoder=frozen_encoder,
+    ).to(device)
 
     # Loss
     from mayascan.train import _make_criterion
     criterion = _make_criterion(loss_type)
 
-    # Optimizer
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    # Optimizer — only trainable params for foundation models
+    if is_foundation and hasattr(model, "trainable_parameters"):
+        train_params = model.trainable_parameters()
+        print(f"  Trainable: {sum(p.numel() for p in train_params):,} / "
+              f"{model.total_param_count():,} params")
+        optimizer = optim.AdamW(train_params, lr=lr, weight_decay=1e-4)
+    else:
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     # Warmup + cosine schedule
     def lr_lambda(epoch: int) -> float:
@@ -265,11 +291,19 @@ def train_fold(
         # --- Train ---
         model.train()
         train_loss = 0.0
-        for images, masks in tqdm(
+        optimizer.zero_grad()
+        for batch_idx, (images, masks) in enumerate(tqdm(
             train_dl, desc=f"[{cls_name} F{fold.fold}] Epoch {epoch + 1}/{epochs}", leave=False
-        ):
+        )):
             images = images.to(device)
             masks = masks.to(device).unsqueeze(1)
+
+            # Resize for foundation model tile size
+            if tile_size and images.shape[-1] != tile_size:
+                images = TF.interpolate(images, size=(tile_size, tile_size),
+                                        mode="bilinear", align_corners=False)
+                masks = TF.interpolate(masks, size=(tile_size, tile_size),
+                                       mode="nearest")
 
             # CutMix: 30% of batches
             if np.random.rand() < 0.3 and images.shape[0] > 1:
@@ -286,23 +320,27 @@ def train_fold(
                 images[:, :, y1:y2, x1:x2] = images[perm, :, y1:y2, x1:x2]
                 masks[:, :, y1:y2, x1:x2] = masks[perm, :, y1:y2, x1:x2]
 
-            optimizer.zero_grad()
             with torch.amp.autocast(device_type=device if device in ("cuda", "cpu") else "cpu", dtype=amp_dtype, enabled=use_amp):
                 logits = model(images)
-                loss = criterion(logits, masks)
+                loss = criterion(logits, masks) / grad_accum_steps
 
             if use_amp:
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
             else:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
 
-            train_loss += loss.item()
+            if (batch_idx + 1) % grad_accum_steps == 0 or (batch_idx + 1) == len(train_dl):
+                if use_amp:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                optimizer.zero_grad()
+
+            train_loss += loss.item() * grad_accum_steps
 
         scheduler.step()
         avg_loss = train_loss / max(len(train_dl), 1)
@@ -313,11 +351,21 @@ def train_fold(
 
         with torch.no_grad():
             for images, masks in val_dl:
+                val_images = images
+                if tile_size and val_images.shape[-1] != tile_size:
+                    val_images = TF.interpolate(val_images, size=(tile_size, tile_size),
+                                                mode="bilinear", align_corners=False)
                 if use_tta and epoch >= epochs - 10:
-                    probs = predict_with_tta(model, images, device).squeeze(1).numpy()
+                    probs = predict_with_tta(model, val_images, device).squeeze(1).numpy()
                 else:
-                    logits = model(images.to(device))
+                    logits = model(val_images.to(device))
                     probs = torch.sigmoid(logits).squeeze(1).cpu().numpy()
+                # Resize probs back to original mask size if needed
+                if tile_size and probs.shape[-1] != masks.shape[-1]:
+                    probs_t = torch.from_numpy(probs).unsqueeze(1)
+                    probs_t = TF.interpolate(probs_t, size=masks.shape[-2:],
+                                             mode="bilinear", align_corners=False)
+                    probs = probs_t.squeeze(1).numpy()
 
                 masks_np = masks.numpy()
                 for i in range(probs.shape[0]):
@@ -338,8 +386,7 @@ def train_fold(
 
         if mean_iou > best_iou:
             best_iou = mean_iou
-            torch.save(
-                {
+            ckpt = {
                     "state_dict": model.state_dict(),
                     "optimizer_state": optimizer.state_dict(),
                     "scheduler_state": scheduler.state_dict(),
@@ -349,9 +396,14 @@ def train_fold(
                     "fold": fold.fold,
                     "best_iou": best_iou,
                     "epoch": epoch + 1,
-                },
-                save_path,
-            )
+                }
+            if is_foundation:
+                ckpt.update({
+                    "use_lora": use_lora,
+                    "lora_rank": lora_rank,
+                    "lora_alpha": lora_alpha,
+                })
+            torch.save(ckpt, save_path)
             print(f"  >>> Saved best {cls_name} fold {fold.fold} model (IoU={best_iou:.4f})")
 
     print(f"\n{cls_name} fold {fold.fold} complete! Best IoU: {best_iou:.4f}")

@@ -24,14 +24,16 @@ from tqdm import tqdm
 
 from mayascan.config import (
     CLASS_NAMES,
-    V2_CLASSES,
-    TILE_SIZE,
-    TILE_OVERLAP,
     CONFIDENCE_THRESHOLD,
-    MIN_BLOB_SIZE,
-    V2_ARCH,
-    V2_ENCODER,
+    DINOV2_TILE_SIZE,
+    FOUNDATION_ARCHS,
     HF_REPO_ID,
+    MIN_BLOB_SIZE,
+    TILE_OVERLAP,
+    TILE_SIZE,
+    V2_ARCH,
+    V2_CLASSES,
+    V2_ENCODER,
 )
 from mayascan.models.unet import MayaScanUNet
 from mayascan.tile import slice_tiles, stitch_tiles
@@ -99,15 +101,30 @@ def _predict_tile_with_tta(
     device: torch.device,
     use_tta: bool,
     binary: bool,
+    target_size: int | None = None,
 ) -> np.ndarray:
     """Run inference on a single tile, optionally with 8-fold TTA.
 
     Returns probability array: (num_classes, H, W) for multi-class,
     or (1, H, W) for binary.
     """
+    orig_h, orig_w = tile.shape[1], tile.shape[2]
+
     def _infer(x: np.ndarray) -> np.ndarray:
         t = torch.from_numpy(x.astype(np.float32)).unsqueeze(0).to(device)
+        # Resize to target_size for foundation models
+        if target_size and (t.shape[-1] != target_size or t.shape[-2] != target_size):
+            t = torch.nn.functional.interpolate(
+                t, size=(target_size, target_size),
+                mode="bilinear", align_corners=False,
+            )
         logits = model(t)
+        # Resize back to original tile size
+        if target_size and (logits.shape[-1] != orig_h or logits.shape[-2] != orig_w):
+            logits = torch.nn.functional.interpolate(
+                logits, size=(orig_h, orig_w),
+                mode="bilinear", align_corners=False,
+            )
         if binary:
             return torch.sigmoid(logits)[0].cpu().numpy()
         else:
@@ -141,6 +158,38 @@ def _load_v2_model(
     device: torch.device | None = None,
 ) -> torch.nn.Module:
     """Load a v2 per-class binary segmentation model."""
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+
+    # Auto-detect arch/encoder from checkpoint metadata
+    if isinstance(checkpoint, dict) and "arch" in checkpoint:
+        arch = checkpoint["arch"]
+    if isinstance(checkpoint, dict) and "encoder" in checkpoint:
+        encoder = checkpoint["encoder"]
+
+    # Foundation model path
+    if arch in FOUNDATION_ARCHS:
+        from mayascan.models.dinov2 import DINOv2Segmenter
+
+        use_lora = checkpoint.get("use_lora", True) if isinstance(checkpoint, dict) else True
+        lora_rank = checkpoint.get("lora_rank", 8) if isinstance(checkpoint, dict) else 8
+        lora_alpha = checkpoint.get("lora_alpha", 16) if isinstance(checkpoint, dict) else 16
+
+        model = DINOv2Segmenter(
+            encoder_name=encoder,
+            use_lora=use_lora,
+            lora_rank=lora_rank,
+            lora_alpha=lora_alpha,
+            frozen_encoder=True,
+            classes=1,
+        )
+
+        state = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
+        model.load_state_dict(state, strict=False)
+        model = model.to(device)
+        model.eval()
+        return model
+
+    # smp path
     arch_map = {
         "deeplabv3plus": smp.DeepLabV3Plus,
         "unetplusplus": smp.UnetPlusPlus,
@@ -150,14 +199,6 @@ def _load_v2_model(
         "manet": smp.MAnet,
         "fpn": smp.FPN,
     }
-
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-
-    # Auto-detect arch/encoder from checkpoint metadata
-    if isinstance(checkpoint, dict) and "arch" in checkpoint:
-        arch = checkpoint["arch"]
-    if isinstance(checkpoint, dict) and "encoder" in checkpoint:
-        encoder = checkpoint["encoder"]
 
     model_cls = arch_map.get(arch, smp.DeepLabV3Plus)
     model = model_cls(
@@ -365,6 +406,11 @@ def run_detection_v2(
     """
     device = _select_device(device)
 
+    # Auto-set tile size for foundation models
+    target_size: int | None = None
+    if arch in FOUNDATION_ARCHS:
+        target_size = DINOV2_TILE_SIZE
+
     # Discover available per-class models
     model_paths = discover_v2_models(model_dir, arch, encoder)
     if not model_paths:
@@ -392,7 +438,10 @@ def run_detection_v2(
         with torch.no_grad():
             for tile in tqdm(tiles, desc=f"{cls_name}{tta_label}",
                              unit="tile", leave=False, disable=len(tiles) < 4):
-                prob = _predict_tile_with_tta(model, tile, device, use_tta, binary=True)
+                prob = _predict_tile_with_tta(
+                    model, tile, device, use_tta, binary=True,
+                    target_size=target_size,
+                )
                 prob_tiles.append(prob)
 
         # Stitch per-class probability
@@ -518,6 +567,12 @@ def run_detection_v2_ensemble(
     from mayascan.crossval import discover_fold_models
 
     device = _select_device(device)
+
+    # Auto-set tile size for foundation models
+    target_size: int | None = None
+    if arch in FOUNDATION_ARCHS:
+        target_size = DINOV2_TILE_SIZE
+
     C, H, W = visualization.shape
     tiles, origins = slice_tiles(visualization, tile_size=tile_size, overlap=overlap)
 
@@ -554,7 +609,10 @@ def run_detection_v2_ensemble(
             with torch.no_grad():
                 for tile in tqdm(tiles, desc=f"{fold_label}{tta_label}",
                                  unit="tile", leave=False, disable=len(tiles) < 4):
-                    prob = _predict_tile_with_tta(model, tile, device, use_tta, binary=True)
+                    prob = _predict_tile_with_tta(
+                        model, tile, device, use_tta, binary=True,
+                        target_size=target_size,
+                    )
                     prob_tiles.append(prob)
 
             prob_map = stitch_tiles(prob_tiles, origins, (1, H, W), overlap=overlap)

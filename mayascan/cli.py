@@ -74,8 +74,8 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
             model_path=args.model,
             confidence_threshold=args.threshold,
         )
-    elif model_dir and discover_v2_models(model_dir):
-        v2_models = discover_v2_models(model_dir)
+    elif model_dir and discover_v2_models(model_dir, args.arch, args.encoder):
+        v2_models = discover_v2_models(model_dir, args.arch, args.encoder)
         if getattr(args, 'ensemble', False):
             from mayascan.detect import run_detection_v2_ensemble
             from mayascan.crossval import discover_fold_models
@@ -113,6 +113,8 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
             result = run_detection_v2(
                 viz,
                 model_dir=model_dir,
+                arch=args.arch,
+                encoder=args.encoder,
                 confidence_threshold=args.threshold,
                 use_tta=args.tta,
                 min_blob_size=args.min_blob,
@@ -247,6 +249,7 @@ def cmd_info(args: argparse.Namespace) -> None:
 from mayascan.config import (
     HF_REPO_ID, CONFIDENCE_THRESHOLD, MIN_BLOB_SIZE, DEFAULT_RESOLUTION,
     V2_ARCH, V2_ENCODER, EPOCHS, BATCH_SIZE, LEARNING_RATE,
+    FOUNDATION_ARCHS, FOUNDATION_LR, LORA_RANK, LORA_ALPHA,
 )
 
 
@@ -327,6 +330,12 @@ def cmd_train(args: argparse.Namespace) -> None:
 
     classes = None if args.cls == "all" else [args.cls]
 
+    # Auto-adjust LR for foundation models if user didn't override
+    lr = args.lr
+    if args.arch in FOUNDATION_ARCHS and args.lr == LEARNING_RATE:
+        lr = FOUNDATION_LR
+        print(f"  Auto-set LR to {lr} for foundation model")
+
     train_all(
         lidar_dir=lidar_dir,
         mask_dir=mask_dir,
@@ -336,11 +345,17 @@ def cmd_train(args: argparse.Namespace) -> None:
         encoder=args.encoder,
         epochs=args.epochs,
         batch_size=args.batch_size,
-        lr=args.lr,
+        lr=lr,
         device=device,
         use_tta=args.tta,
         use_amp=args.amp,
         loss_type=args.loss,
+        grad_accum_steps=args.grad_accum,
+        use_lora=args.lora,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        frozen_encoder=not args.unfreeze_encoder,
+        tile_size=args.tile_size,
     )
 
 
@@ -375,16 +390,28 @@ def cmd_train_kfold(args: argparse.Namespace) -> None:
     print(f"  Epochs:  {args.epochs}, Batch: {args.batch_size}, LR: {args.lr}")
     print(f"  AMP:     {args.amp}")
 
+    # Auto-adjust LR for foundation models if user didn't override
+    lr = args.lr
+    if args.arch in FOUNDATION_ARCHS and args.lr == LEARNING_RATE:
+        lr = FOUNDATION_LR
+        print(f"  Auto-set LR to {lr} for foundation model")
+
     kwargs = dict(
         arch=args.arch,
         encoder=args.encoder,
         epochs=args.epochs,
         batch_size=args.batch_size,
-        lr=args.lr,
+        lr=lr,
         device=device,
         use_tta=args.tta,
         use_amp=args.amp,
         loss_type=args.loss,
+        grad_accum_steps=args.grad_accum,
+        use_lora=args.lora,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        frozen_encoder=not args.unfreeze_encoder,
+        tile_size=args.tile_size,
     )
 
     if args.cls == "all":
@@ -601,6 +628,8 @@ def main() -> None:
     scan_p.add_argument("-o", "--output", default="results", help="Output directory")
     scan_p.add_argument("--model-dir", default="models", help="v2 model directory")
     scan_p.add_argument("--model", default=None, help="v1 model path (.pth)")
+    scan_p.add_argument("--arch", default=V2_ARCH, help="Model architecture (e.g. deeplabv3plus, dinov2)")
+    scan_p.add_argument("--encoder", default=V2_ENCODER, help="Encoder backbone (e.g. resnet101, dinov2-large)")
     scan_p.add_argument("--threshold", type=float, default=CONFIDENCE_THRESHOLD, help="Confidence threshold")
     scan_p.add_argument("--resolution", type=float, default=DEFAULT_RESOLUTION, help="DEM resolution (m/px)")
     scan_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
@@ -633,6 +662,20 @@ def main() -> None:
     train_p.add_argument("--amp", action="store_true", help="Use automatic mixed precision")
     train_p.add_argument("--loss", default="focal_dice", choices=["focal_dice", "focal_lovasz"],
                          help="Loss function (default: focal_dice)")
+    train_p.add_argument("--grad-accum", type=int, default=1,
+                         help="Gradient accumulation steps (effective batch = batch_size * grad_accum)")
+    train_p.add_argument("--lora", action="store_true", default=True,
+                         help="Enable LoRA adapters for foundation models (default: True)")
+    train_p.add_argument("--no-lora", dest="lora", action="store_false",
+                         help="Disable LoRA adapters")
+    train_p.add_argument("--lora-rank", type=int, default=LORA_RANK,
+                         help=f"LoRA rank (default: {LORA_RANK})")
+    train_p.add_argument("--lora-alpha", type=int, default=LORA_ALPHA,
+                         help=f"LoRA alpha (default: {LORA_ALPHA})")
+    train_p.add_argument("--unfreeze-encoder", action="store_true",
+                         help="Unfreeze encoder weights (not recommended for foundation models)")
+    train_p.add_argument("--tile-size", type=int, default=None,
+                         help="Tile size (auto-set to 518 for DINOv2)")
     train_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # train-kfold command
@@ -651,6 +694,20 @@ def main() -> None:
     kfold_p.add_argument("--amp", action="store_true", help="Use automatic mixed precision")
     kfold_p.add_argument("--loss", default="focal_dice", choices=["focal_dice", "focal_lovasz"],
                          help="Loss function (default: focal_dice)")
+    kfold_p.add_argument("--grad-accum", type=int, default=1,
+                         help="Gradient accumulation steps (effective batch = batch_size * grad_accum)")
+    kfold_p.add_argument("--lora", action="store_true", default=True,
+                         help="Enable LoRA adapters for foundation models (default: True)")
+    kfold_p.add_argument("--no-lora", dest="lora", action="store_false",
+                         help="Disable LoRA adapters")
+    kfold_p.add_argument("--lora-rank", type=int, default=LORA_RANK,
+                         help=f"LoRA rank (default: {LORA_RANK})")
+    kfold_p.add_argument("--lora-alpha", type=int, default=LORA_ALPHA,
+                         help=f"LoRA alpha (default: {LORA_ALPHA})")
+    kfold_p.add_argument("--unfreeze-encoder", action="store_true",
+                         help="Unfreeze encoder weights (not recommended for foundation models)")
+    kfold_p.add_argument("--tile-size", type=int, default=None,
+                         help="Tile size (auto-set to 518 for DINOv2)")
     kfold_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # evaluate command
