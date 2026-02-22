@@ -13,12 +13,14 @@ together, and applies a confidence threshold to produce a final segmentation map
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import segmentation_models_pytorch as smp
 import torch
+from tqdm import tqdm
 
 from mayascan.models.unet import MayaScanUNet
 from mayascan.tile import slice_tiles, stitch_tiles
@@ -238,7 +240,8 @@ def run_detection(
     prob_tiles: list[np.ndarray] = []
 
     with torch.no_grad():
-        for tile in tiles:
+        for tile in tqdm(tiles, desc="Inference", unit="tile", leave=False,
+                         disable=len(tiles) < 4):
             x = torch.from_numpy(tile.astype(np.float32)).unsqueeze(0).to(device)
             logits = model(x)
             probs = torch.softmax(logits, dim=1)
@@ -328,12 +331,15 @@ def run_detection_v2(
     class_probs: dict[int, np.ndarray] = {}
 
     for cls_id, mpath in model_paths.items():
+        cls_name = V2_CLASSES.get(cls_id, f"class_{cls_id}")
         model = _load_v2_model(mpath, arch=arch, encoder=encoder, device=device)
 
         # Run inference per tile
         prob_tiles: list[np.ndarray] = []
+        tta_label = " +TTA" if use_tta else ""
         with torch.no_grad():
-            for tile in tiles:
+            for tile in tqdm(tiles, desc=f"{cls_name}{tta_label}",
+                             unit="tile", leave=False, disable=len(tiles) < 4):
                 prob = _predict_tile_with_tta(model, tile, device, use_tta, binary=True)
                 prob_tiles.append(prob)
 

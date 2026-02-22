@@ -413,3 +413,157 @@ def to_confidence_geotiff(
         img.save(str(output_path), format="TIFF")
 
     return output_path
+
+
+# Class colours for overlay rendering (RGBA)
+_OVERLAY_COLORS: dict[int, tuple[int, int, int, int]] = {
+    0: (0, 0, 0, 0),           # background — transparent
+    1: (255, 60, 60, 180),     # building — red
+    2: (60, 200, 60, 180),     # platform — green
+    3: (50, 120, 255, 180),    # aguada — blue
+}
+
+
+def to_overlay_png(
+    result: DetectionResult,
+    viz: np.ndarray,
+    output_path: str | Path,
+    opacity: float = 0.6,
+) -> Path:
+    """Export a blended overlay of detections on the visualization.
+
+    Parameters
+    ----------
+    result : DetectionResult
+        Detection output.
+    viz : np.ndarray
+        Visualization raster (3, H, W) float32 in [0, 1].
+    output_path : str or Path
+        Destination PNG file path.
+    opacity : float
+        Overlay opacity (0 = transparent, 1 = opaque).
+
+    Returns
+    -------
+    Path
+        The written PNG file path.
+    """
+    from PIL import Image
+
+    output_path = Path(output_path)
+
+    # Convert viz to RGB uint8
+    base = (np.transpose(viz, (1, 2, 0)) * 255).clip(0, 255).astype(np.uint8)
+
+    # Create RGBA overlay
+    h, w = result.classes.shape
+    overlay = np.zeros((h, w, 4), dtype=np.uint8)
+    for cls_id, color in _OVERLAY_COLORS.items():
+        mask = result.classes == cls_id
+        overlay[mask] = color
+
+    # Blend
+    base_f = base.astype(np.float32) / 255.0
+    over_f = overlay[:, :, :3].astype(np.float32) / 255.0
+    alpha = (overlay[:, :, 3].astype(np.float32) / 255.0 * opacity)[:, :, np.newaxis]
+    blended = base_f * (1 - alpha) + over_f * alpha
+    blended_uint8 = (blended * 255).clip(0, 255).astype(np.uint8)
+
+    Image.fromarray(blended_uint8).save(str(output_path))
+    return output_path
+
+
+def to_shapefile(
+    result: DetectionResult,
+    output_path: str | Path,
+    pixel_size: float = 0.5,
+) -> Path:
+    """Export detected features as an ESRI Shapefile using geopandas.
+
+    Requires the ``geo`` optional dependency (``pip install mayascan[geo]``).
+
+    Parameters
+    ----------
+    result : DetectionResult
+        Detection output.
+    output_path : str or Path
+        Destination .shp file path.
+    pixel_size : float
+        Ground resolution in metres per pixel (default 0.5 m).
+
+    Returns
+    -------
+    Path
+        The written Shapefile path.
+
+    Raises
+    ------
+    ImportError
+        If geopandas or shapely are not installed.
+    """
+    import geopandas as gpd
+    from shapely.geometry import Polygon, Point
+
+    output_path = Path(output_path)
+    geo = result.geo
+
+    records = []
+    for class_id, class_name in result.class_names.items():
+        if class_id == 0:
+            continue
+
+        mask = result.classes == class_id
+        if not mask.any():
+            continue
+
+        labeled_arr, num_features = label(mask)
+
+        for feat_idx in range(1, num_features + 1):
+            feat_mask = labeled_arr == feat_idx
+            pixel_count = int(feat_mask.sum())
+            area_m2 = pixel_count * pixel_size * pixel_size
+            confidence = float(result.confidence[feat_mask].mean())
+
+            rows, cols = np.where(feat_mask)
+            centroid_row = float(rows.mean())
+            centroid_col = float(cols.mean())
+
+            # Create polygon via convex hull
+            try:
+                from scipy.spatial import ConvexHull
+                points = np.column_stack([cols, rows]).astype(np.float64)
+                if len(points) >= 3:
+                    hull = ConvexHull(points)
+                    hull_coords = [
+                        _pixel_to_map(points[v, 1], points[v, 0], geo)
+                        for v in hull.vertices
+                    ]
+                    hull_coords.append(hull_coords[0])
+                    geometry = Polygon(hull_coords)
+                else:
+                    cx, cy = _pixel_to_map(centroid_row, centroid_col, geo)
+                    geometry = Point(cx, cy).buffer(pixel_size)
+            except Exception:
+                row_min, row_max = int(rows.min()), int(rows.max())
+                col_min, col_max = int(cols.min()), int(cols.max())
+                corners = [
+                    _pixel_to_map(row_min, col_min, geo),
+                    _pixel_to_map(row_min, col_max + 1, geo),
+                    _pixel_to_map(row_max + 1, col_max + 1, geo),
+                    _pixel_to_map(row_max + 1, col_min, geo),
+                ]
+                geometry = Polygon(corners)
+
+            records.append({
+                "class": class_name,
+                "class_id": class_id,
+                "area_m2": round(area_m2, 2),
+                "confidence": round(confidence, 4),
+                "pixels": pixel_count,
+                "geometry": geometry,
+            })
+
+    crs = geo.crs if geo and geo.crs else None
+    gdf = gpd.GeoDataFrame(records, crs=crs)
+    gdf.to_file(str(output_path))
+    return output_path

@@ -23,7 +23,7 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
     """Process a single DEM file."""
     import mayascan
     from mayascan.detect import discover_v2_models, run_detection_v2, GeoInfo
-    from mayascan.export import to_csv, to_geojson, to_geotiff
+    from mayascan.export import to_csv, to_geojson, to_geotiff, to_overlay_png
 
     t0 = time.time()
 
@@ -121,17 +121,19 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
     geojson_path = to_geojson(result, out_dir / f"{stem}_detections.geojson", pixel_size=resolution)
     tiff_path = to_geotiff(result, out_dir / f"{stem}_detections.tif", pixel_size=resolution)
 
-    # Save visualization as PNG
+    # Save visualization and overlay PNGs
     viz_rgb = (np.transpose(viz, (1, 2, 0)) * 255).clip(0, 255).astype(np.uint8)
     from PIL import Image
 
     Image.fromarray(viz_rgb).save(str(out_dir / f"{stem}_visualization.png"))
+    overlay_path = to_overlay_png(result, viz, out_dir / f"{stem}_overlay.png")
 
     print(f"\n  Exported to {out_dir}/:")
     print(f"    {csv_path.name}")
     print(f"    {geojson_path.name}")
     print(f"    {tiff_path.name}")
     print(f"    {stem}_visualization.png")
+    print(f"    {overlay_path.name}")
     if geo.crs:
         print(f"    (georeferenced: {geo.crs})")
     print(f"  Time: {time.time() - t0:.1f}s")
