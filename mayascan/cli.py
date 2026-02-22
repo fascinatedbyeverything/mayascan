@@ -402,6 +402,107 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     print(format_benchmark(results))
 
 
+def cmd_analyze(args: argparse.Namespace) -> None:
+    """Run full post-detection analysis on a results directory."""
+    import json
+    from mayascan.features import extract_features, filter_features, feature_summary
+    from mayascan.morphology import analyze_features, settlement_summary
+    from mayascan.spatial import cluster_features, identify_site_core, settlement_hierarchy
+    from mayascan.heatmap import feature_density_map, class_density_maps, save_density_png
+    from mayascan.detect import DetectionResult
+    from mayascan.config import CLASS_NAMES
+    from PIL import Image
+
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load detection result from GeoTIFF
+    tif_path = Path(args.input)
+    print(f"Loading detections from {tif_path}")
+
+    try:
+        import rasterio
+        with rasterio.open(str(tif_path)) as src:
+            classes = src.read(1).astype(np.int64)
+    except ImportError:
+        img = np.array(Image.open(str(tif_path)))
+        classes = img.astype(np.int64)
+
+    confidence = np.where(classes > 0, 0.8, 0.0).astype(np.float32)
+    result = DetectionResult(
+        classes=classes,
+        confidence=confidence,
+        class_names=dict(CLASS_NAMES),
+    )
+
+    pixel_size = args.resolution
+    h, w = classes.shape
+    print(f"  Image: {h}x{w} pixels, resolution {pixel_size} m/px")
+
+    # Extract and filter features
+    print("\nExtracting features...")
+    features = extract_features(result, pixel_size=pixel_size)
+    if args.min_area:
+        features = filter_features(features, min_area=args.min_area)
+    print(f"  {len(features)} features extracted")
+
+    summary = feature_summary(features)
+    print(f"  Total area: {summary['total_area_m2']:,.0f} m²")
+    for cls, data in summary.get("by_class", {}).items():
+        print(f"    {cls}: {data['count']} features ({data['total_area_m2']:,.0f} m²)")
+
+    # Shape analysis
+    print("\nAnalyzing feature morphology...")
+    profiles = analyze_features(features, pixel_size=pixel_size)
+    sett_summary = settlement_summary(profiles, pixel_size=pixel_size)
+    print(f"  Structure types: {sett_summary['structure_types']}")
+    if sett_summary.get("shape_stats"):
+        ss = sett_summary["shape_stats"]
+        print(f"  Mean compactness: {ss['mean_compactness']:.3f}")
+        print(f"  Mean elongation: {ss['mean_elongation']:.3f}")
+
+    # Spatial clustering
+    print("\nClustering features...")
+    clusters = cluster_features(features, eps_px=args.eps, min_features=args.min_cluster)
+    real_clusters = [c for c in clusters if c.cluster_id >= 0]
+    noise = [c for c in clusters if c.cluster_id < 0]
+    print(f"  {len(real_clusters)} clusters found, {sum(len(c.features) for c in noise)} outlier features")
+
+    core = identify_site_core(clusters)
+    if core:
+        print(f"  Site core: cluster {core.cluster_id} ({len(core.features)} features, density={core.density:.2f})")
+
+    hierarchy = settlement_hierarchy(clusters, pixel_size=pixel_size)
+    for entry in hierarchy[:5]:
+        print(f"    Rank {entry['rank']}: {entry['role']} — {entry['feature_count']} features, {entry['extent_m']:.0f}m extent")
+
+    # Density heatmaps
+    print("\nGenerating density heatmaps...")
+    density = feature_density_map(features, shape=(h, w), sigma=args.sigma)
+    save_density_png(density, str(out_dir / "density_all.png"), colormap="hot")
+
+    per_class = class_density_maps(features, shape=(h, w), sigma=args.sigma)
+    for cls_name, dmap in per_class.items():
+        save_density_png(dmap, str(out_dir / f"density_{cls_name}.png"), colormap="hot")
+
+    # Save analysis report
+    analysis = {
+        "feature_summary": summary,
+        "settlement_summary": sett_summary,
+        "hierarchy": hierarchy,
+        "cluster_count": len(real_clusters),
+        "outlier_features": sum(len(c.features) for c in noise),
+    }
+    with open(out_dir / "analysis.json", "w") as f:
+        json.dump(analysis, f, indent=2)
+
+    print(f"\nAnalysis saved to {out_dir}/:")
+    print(f"  analysis.json")
+    print(f"  density_all.png")
+    for cls_name in per_class:
+        print(f"  density_{cls_name}.png")
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -466,6 +567,16 @@ def main() -> None:
     bench_p.add_argument("--resolution", type=float, default=DEFAULT_RESOLUTION, help="DEM resolution (m/px)")
     bench_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
+    # analyze command
+    ana_p = subparsers.add_parser("analyze", help="Run post-detection analysis (morphology, clustering, heatmaps)")
+    ana_p.add_argument("input", help="Detection result GeoTIFF (class map)")
+    ana_p.add_argument("-o", "--output", default="analysis", help="Output directory")
+    ana_p.add_argument("--resolution", type=float, default=DEFAULT_RESOLUTION, help="Pixel size (m/px)")
+    ana_p.add_argument("--min-area", type=float, default=None, help="Min feature area (m²)")
+    ana_p.add_argument("--eps", type=float, default=100.0, help="Clustering distance (pixels)")
+    ana_p.add_argument("--min-cluster", type=int, default=3, help="Min features per cluster")
+    ana_p.add_argument("--sigma", type=float, default=20.0, help="Heatmap smoothing sigma (pixels)")
+
     # version command
     subparsers.add_parser("version", help="Show MayaScan version")
 
@@ -483,6 +594,8 @@ def main() -> None:
         cmd_evaluate(args)
     elif args.command == "benchmark":
         cmd_benchmark(args)
+    elif args.command == "analyze":
+        cmd_analyze(args)
     elif args.command == "version":
         import mayascan
         print(f"MayaScan v{mayascan.__version__}")

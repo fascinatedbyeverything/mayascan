@@ -26,6 +26,19 @@ from mayascan.spatial import (
     identify_site_core,
     settlement_hierarchy,
 )
+from mayascan.heatmap import (
+    feature_density_map,
+    class_density_maps,
+    density_to_rgba,
+    save_density_png,
+)
+from mayascan.comparison import (
+    ComparisonResult,
+    compare_detections,
+    comparison_summary,
+    difference_map,
+    count_feature_changes,
+)
 from mayascan.morphology import (
     ShapeDescriptors,
     FeatureProfile,
@@ -73,6 +86,15 @@ __all__ = [
     "cluster_features",
     "identify_site_core",
     "settlement_hierarchy",
+    "feature_density_map",
+    "class_density_maps",
+    "density_to_rgba",
+    "save_density_png",
+    "ComparisonResult",
+    "compare_detections",
+    "comparison_summary",
+    "difference_map",
+    "count_feature_changes",
 ]
 
 
