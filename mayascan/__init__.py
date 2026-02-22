@@ -20,6 +20,14 @@ from mayascan.augment import augment_sample, cutmix
 from mayascan.ensemble import average_probabilities, majority_vote, merge_results
 from mayascan.multiscale import run_multiscale_detection
 from mayascan.benchmark import BenchmarkResult, run_benchmark, format_benchmark
+from mayascan.morphology import (
+    ShapeDescriptors,
+    FeatureProfile,
+    compute_shape_descriptors,
+    analyze_features,
+    classify_structure,
+    settlement_summary,
+)
 
 __all__ = [
     "__version__",
@@ -49,6 +57,12 @@ __all__ = [
     "BenchmarkResult",
     "run_benchmark",
     "format_benchmark",
+    "ShapeDescriptors",
+    "FeatureProfile",
+    "compute_shape_descriptors",
+    "analyze_features",
+    "classify_structure",
+    "settlement_summary",
 ]
 
 

@@ -233,6 +233,8 @@ mayascan train --data-dir DIR [--save-dir DIR] [--cls CLASS]
 mayascan evaluate [--model-dir DIR] [--arch ARCH] [--encoder ENC]
                   [--threshold T] [--save-viz DIR] [--device D]
 
+mayascan benchmark <input> [--model-dir DIR] [--resolution R] [--device D]
+
 mayascan info [MODEL_DIR]
 
 mayascan download [--model-dir DIR] [--repo REPO_ID] [--force]
@@ -271,16 +273,17 @@ mayascan/
 ├── data.py              # PyTorch dataset with oversampling
 ├── train.py             # Reusable training loop
 ├── crossval.py          # K-fold cross-validation
+├── benchmark.py         # Inference speed benchmarking
 ├── crs.py               # Coordinate reference system utilities
 ├── classify.py          # Ground-point classification (PDAL)
-├── cli.py               # CLI (scan, train, evaluate, info, download, version)
+├── cli.py               # CLI (scan, train, evaluate, benchmark, info, download, version)
 ├── models/
 │   └── unet.py          # U-Net wrapper
 ├── app.py               # Gradio web interface
 ├── train_v2.py          # Standalone training script
 ├── evaluate.py          # Model evaluation
 ├── upload_models.py     # HuggingFace model upload with model card
-└── tests/               # 182 tests
+└── tests/               # 221 tests
 ```
 
 ## Requirements
