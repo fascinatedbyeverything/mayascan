@@ -6,12 +6,14 @@ Upload a LiDAR DEM, get back a map of probable ancient structures — buildings,
 
 ## Features
 
-- **Per-class binary segmentation** — separate DeepLabV3+ (ResNet-101) models for each feature class, trained with competition-winning techniques from ECML PKDD 2021 Maya Challenge
-- **Terrain visualization** — automatic SVF, openness, and slope computation from raw DEMs (using rvt-py or scipy fallback)
+- **Per-class binary segmentation** — separate models per class, trained with competition-winning techniques from ECML PKDD 2021 Maya Challenge
+- **Multiple architectures** — DeepLabV3+, U-Net, U-Net++, Segformer, UPerNet, MAnet, FPN with any timm/smp encoder
+- **Mixed precision training** — AMP support for faster training on GPU/MPS
+- **Terrain visualization** — automatic SVF, openness, slope, roughness, and curvature from raw DEMs (3 or 5 channel; rvt-py or scipy fallback)
 - **Test-Time Augmentation (TTA)** — 8-fold augmentation (4 rotations x 2 flips) for robust predictions
 - **Multi-scale inference** — run at multiple tile sizes and merge via ensemble for higher accuracy
 - **Model ensemble** — probability averaging and majority voting for combining multiple models
-- **K-fold cross-validation** — reproducible fold splitting for competition-grade training
+- **K-fold cross-validation** — fold splitting, per-fold training, and ensemble inference for competition-grade accuracy
 - **Georeferenced output** — CRS and affine transform propagated from input GeoTIFFs to all exports
 - **Multiple export formats** — GeoTIFF, GeoJSON (polygon contours), CSV, Shapefile, KML, overlay PNG, HTML/JSON reports
 - **Feature analysis** — extract, filter, and summarize individual features by area, confidence, and class
@@ -147,8 +149,8 @@ Opens a Gradio interface where you can upload DEMs, adjust confidence thresholds
 ```
 Raw DEM (GeoTIFF)
     ↓
-Terrain Visualization (SVF, Openness, Slope)
-    ↓  → (3, H, W) float32
+Terrain Visualization (SVF, Openness, Slope [+ Roughness, Curvature])
+    ↓  → (3 or 5, H, W) float32
 Tiled Inference (480×480 patches, 50% overlap)
     ↓
 Per-class Binary Models (DeepLabV3+ ResNet-101)
@@ -166,10 +168,11 @@ Export (GeoTIFF, GeoJSON, CSV, Shapefile, KML, Overlay PNG, Reports)
 
 ### Model Architecture
 
-**v2 (recommended):** Three separate binary segmentation models, one per class:
-- Building/mound detector — DeepLabV3+ with ResNet-101
-- Platform detector — DeepLabV3+ with ResNet-101
-- Aguada detector — DeepLabV3+ with ResNet-101
+**v2 (recommended):** Three separate binary segmentation models, one per class.
+Default encoder is ResNet-101 but supports any smp-compatible backbone.
+
+Supported architectures: DeepLabV3+, U-Net, U-Net++, Segformer, UPerNet, MAnet, FPN.
+Supported encoders: ResNet family, EfficientNet family, MiT (mit_b0–b5), and more.
 
 Each model uses:
 - **Focal + Dice combo loss** for extreme class imbalance
@@ -190,13 +193,15 @@ Each model uses:
 
 ### Terrain Visualizations
 
-MayaScan computes three complementary terrain features from raw DEMs:
+MayaScan computes terrain features from raw DEMs:
 
-1. **Sky-View Factor (SVF)** — openness of the sky hemisphere above each point. Depressions (aguadas, building foundations) show low SVF.
+1. **Sky-View Factor (SVF)** — openness of the sky hemisphere above each point. Depressions show low SVF.
 2. **Positive Openness** — angular measure of terrain openness. Ridges and elevated features show high openness.
-3. **Slope** — terrain gradient in degrees. Artificial structures typically have steeper slopes than natural terrain.
+3. **Slope** — terrain gradient in degrees. Artificial structures typically have steeper slopes.
+4. **Roughness** — local standard deviation of elevation. Archaeological structures show higher roughness.
+5. **Curvature** — Laplacian curvature. Highlights convex (mounds, walls) and concave (depressions) features.
 
-These are stacked as a 3-channel image fed to the segmentation models.
+Default: channels 1–3 (backwards compatible). Use `channels=5` for best accuracy (per npj Heritage Science 2025).
 
 ## Training
 
@@ -207,16 +212,25 @@ Training uses the [Chactun archaeological LiDAR dataset](https://figshare.com/ar
 ### Train Your Own Models
 
 ```bash
-# Using the CLI (recommended)
+# Train all classes
 python -m mayascan train --data-dir chactun_data/extracted --epochs 80
 
-# Using the standalone script (advanced)
-python train_v2.py --cls all --epochs 80 --batch-size 4
+# Train with mixed precision (faster on GPU/MPS)
+python -m mayascan train --data-dir chactun_data/extracted --amp --device mps
 
-# Cross-validation
-from mayascan.crossval import create_folds, fold_summary
+# K-fold cross-validation training (competition-grade)
+python -m mayascan train-kfold --data-dir chactun_data/extracted --folds 5 --amp
+
+# Train with a different architecture
+python -m mayascan train --data-dir chactun_data/extracted --arch segformer --encoder mit_b3
+```
+
+```python
+# K-fold cross-validation from Python
+from mayascan.crossval import create_folds, fold_summary, train_kfold
 folds = create_folds("chactun_data/extracted/lidar", n_folds=5)
 print(fold_summary(folds))
+results = train_kfold("building", lidar_dir, mask_dir, save_dir, device="mps", use_amp=True)
 ```
 
 Training supports automatic checkpoint resume — if a model file exists, training resumes from the last saved epoch with optimizer and scheduler state restored.
@@ -238,11 +252,14 @@ mixed_img, mixed_mask = cutmix(img1, mask1, img2, mask2)
 ```
 mayascan scan <input> [-o OUTPUT] [--model-dir DIR] [--threshold T]
                       [--resolution R] [--no-tta] [--multiscale]
-                      [--min-blob N] [--device D]
+                      [--ensemble] [--min-blob N] [--device D]
 
 mayascan train --data-dir DIR [--save-dir DIR] [--cls CLASS]
                [--arch ARCH] [--encoder ENC] [--epochs N]
-               [--batch-size N] [--lr LR] [--device D]
+               [--batch-size N] [--lr LR] [--amp] [--device D]
+
+mayascan train-kfold --data-dir DIR [--save-dir DIR] [--cls CLASS]
+                     [--folds N] [--seed S] [--amp] [--device D]
 
 mayascan evaluate [--model-dir DIR] [--arch ARCH] [--encoder ENC]
                   [--threshold T] [--save-viz DIR] [--device D]
@@ -262,6 +279,9 @@ mayascan version
 | `--resolution` | 0.5 | DEM pixel size in metres (auto-detected from GeoTIFF) |
 | `--no-tta` | — | Disable test-time augmentation (faster, less accurate) |
 | `--multiscale` | — | Multi-scale inference at 3 tile sizes (slower, more accurate) |
+| `--ensemble` | — | K-fold ensemble inference (average predictions across fold models) |
+| `--amp` | — | Mixed precision training for faster GPU/MPS training |
+| `--folds` | 5 | Number of cross-validation folds |
 | `--min-blob` | 50 | Minimum feature size in pixels |
 | `--device` | auto | Compute device: `cuda`, `mps`, or `cpu` |
 | `--model-dir` | `models/` | Directory containing v2 per-class models |
@@ -301,8 +321,23 @@ mayascan/
 ├── train_v2.py          # Standalone training script
 ├── evaluate.py          # Model evaluation
 ├── upload_models.py     # HuggingFace model upload with model card
-└── tests/               # 300 tests
+└── tests/               # 318 tests
 ```
+
+## Performance
+
+Evaluated on the Chactun validation set (20% holdout, 419 tiles):
+
+| Class | IoU | Precision | Recall | F1 |
+|-------|-----|-----------|--------|-----|
+| Building | 0.724 | 0.838 | 0.842 | 0.840 |
+| Platform | 0.608 | 0.673 | 0.863 | 0.756 |
+| Aguada | 0.598 | 0.844 | 0.672 | 0.748 |
+| **Mean** | **0.643** | **0.785** | **0.792** | **0.781** |
+
+These are single-model results with 3-channel input. Further improvements expected from K-fold ensemble, 5-channel input (SVF + openness + slope + roughness + curvature), and transformer encoders.
+
+**Competition context:** ECML PKDD 2021 Maya Challenge top entries achieved ~0.66 mIoU. Recent work (Zhang et al. 2024) reports 0.84 IoU for platform detection using YOLOv8.
 
 ## Requirements
 
@@ -325,6 +360,8 @@ Optional: rasterio (georeferenced I/O), rvt-py (high-quality visualizations), gr
 - Somrak et al. (2020) — "Learning to classify structures in ALS-derived visualizations of ancient Maya settlements." *Remote Sensing*
 - ECML PKDD 2021 Discovery Challenge — Maya archaeological feature detection competition
 - Kokalj & Somrak (2019) — "Why not a single image? Combining visualizations to facilitate fieldwork and on-screen mapping." *Remote Sensing*
+- Zhang et al. (2024) — YOLOv8 for Maya platform detection, IoU 0.842
+- Bundzel et al. (2020) — Multi-channel LiDAR visualization for archaeological segmentation. *npj Heritage Science*
 
 ## License
 

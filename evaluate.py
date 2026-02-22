@@ -193,7 +193,19 @@ def load_v2_model(
         "deeplabv3plus": smp.DeepLabV3Plus,
         "unetplusplus": smp.UnetPlusPlus,
         "unet": smp.Unet,
+        "segformer": smp.Segformer,
+        "upernet": smp.UPerNet,
+        "manet": smp.MAnet,
+        "fpn": smp.FPN,
     }
+
+    # Auto-detect arch/encoder from checkpoint metadata
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    if isinstance(checkpoint, dict) and "arch" in checkpoint:
+        arch = checkpoint["arch"]
+    if isinstance(checkpoint, dict) and "encoder" in checkpoint:
+        encoder = checkpoint["encoder"]
+
     model_cls = arch_map.get(arch, smp.DeepLabV3Plus)
     model = model_cls(
         encoder_name=encoder,
@@ -202,7 +214,6 @@ def load_v2_model(
         classes=1,
     )
 
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     meta = {}
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         state = checkpoint["state_dict"]
@@ -543,6 +554,7 @@ def print_results(metrics: dict[int, ClassMetrics], model_label: str) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    global DATA_DIR
     parser = argparse.ArgumentParser(
         description="Evaluate MayaScan models on the Chactun validation set.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -564,7 +576,7 @@ def main():
     )
     parser.add_argument(
         "--arch", type=str, default="deeplabv3plus",
-        choices=["deeplabv3plus", "unetplusplus", "unet"],
+        choices=["deeplabv3plus", "unetplusplus", "unet", "segformer", "upernet", "manet", "fpn"],
         help="v2 model architecture (default: deeplabv3plus)",
     )
     parser.add_argument(
@@ -604,7 +616,6 @@ def main():
         parser.error("Specify either --model (v1) or --model-dir (v2), not both")
 
     # Override data dir if specified
-    global DATA_DIR
     DATA_DIR = args.data_dir
 
     # Device
