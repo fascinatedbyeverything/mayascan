@@ -123,7 +123,7 @@ def _load_v2_model(
         in_channels=3,
         classes=1,
     )
-    state = torch.load(model_path, map_location=device, weights_only=True)
+    state = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(state)
     model = model.to(device)
     model.eval()
@@ -189,7 +189,10 @@ def run_detection(
     model = MayaScanUNet(num_classes=num_classes, encoder="resnet34", pretrained=False)
 
     if model_path is not None:
-        state = torch.load(model_path, map_location=device)
+        state = torch.load(model_path, map_location=device, weights_only=False)
+        # Handle state_dict saved from raw smp.Unet (no "net." prefix)
+        if any(k.startswith("encoder.") for k in state):
+            state = {f"net.{k}": v for k, v in state.items()}
         model.load_state_dict(state)
 
     model = model.to(device)
