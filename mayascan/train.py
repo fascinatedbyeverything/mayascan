@@ -50,9 +50,11 @@ def _build_model(
     Parameters
     ----------
     arch : str
-        Architecture name: ``"deeplabv3plus"``, ``"unetplusplus"``, ``"unet"``.
+        Architecture name: ``"deeplabv3plus"``, ``"unetplusplus"``, ``"unet"``,
+        ``"segformer"``, ``"upernet"``, ``"manet"``, ``"fpn"``.
     encoder : str
-        Encoder backbone name (e.g. ``"resnet101"``).
+        Encoder backbone name (e.g. ``"resnet101"``, ``"efficientnet-b5"``,
+        ``"mit_b3"``).
     in_channels : int
         Number of input channels.
     classes : int
@@ -69,6 +71,10 @@ def _build_model(
         "deeplabv3plus": smp.DeepLabV3Plus,
         "unetplusplus": smp.UnetPlusPlus,
         "unet": smp.Unet,
+        "segformer": smp.Segformer,
+        "upernet": smp.UPerNet,
+        "manet": smp.MAnet,
+        "fpn": smp.FPN,
     }
     if arch not in builders:
         raise ValueError(f"Unknown architecture: {arch}. Choose from {list(builders)}")
@@ -154,8 +160,13 @@ def postprocess_mask(
     return binary
 
 
-def compute_binary_iou(preds: np.ndarray, masks: np.ndarray) -> float:
+def compute_binary_iou(preds: np.ndarray, masks: np.ndarray) -> float | None:
     """Compute IoU for binary predictions.
+
+    Returns None for tiles where both prediction and ground truth are empty
+    (true negatives), so they can be excluded from averaging. This prevents
+    rare classes like aguada (3.7% positive tiles) from having their IoU
+    dragged to near-zero by empty tiles.
 
     Parameters
     ----------
@@ -166,13 +177,16 @@ def compute_binary_iou(preds: np.ndarray, masks: np.ndarray) -> float:
 
     Returns
     -------
-    float
-        Intersection over Union.
+    float or None
+        Intersection over Union, or None if both are empty.
     """
-    intersection = ((preds > 0) & (masks > 0)).sum()
-    union = ((preds > 0) | (masks > 0)).sum()
+    pred_pos = preds > 0
+    mask_pos = masks > 0
+    intersection = (pred_pos & mask_pos).sum()
+    union = (pred_pos | mask_pos).sum()
     if union == 0:
-        return 0.0
+        # Both empty: true negative — exclude from IoU average
+        return None
     return float(intersection / union)
 
 
@@ -190,6 +204,7 @@ def train_class(
     use_tta: bool = True,
     warmup_epochs: int = 5,
     num_workers: int = 4,
+    use_amp: bool = False,
 ) -> tuple[float, str]:
     """Train a binary segmentation model for a single class.
 
@@ -221,6 +236,8 @@ def train_class(
         Number of warmup epochs.
     num_workers : int
         DataLoader worker count.
+    use_amp : bool
+        Whether to use automatic mixed precision for faster training.
 
     Returns
     -------
@@ -229,7 +246,7 @@ def train_class(
     """
     print(f"\n{'=' * 60}")
     print(f"Training binary model: {cls_name}")
-    print(f"Architecture: {arch} ({encoder}), Epochs: {epochs}")
+    print(f"Architecture: {arch} ({encoder}), Epochs: {epochs}, AMP: {use_amp}")
     print(f"{'=' * 60}\n")
 
     # Datasets
@@ -279,6 +296,10 @@ def train_class(
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    # AMP scaler for mixed precision
+    scaler = torch.amp.GradScaler(enabled=use_amp and device != "cpu")
+    amp_dtype = torch.float16 if device == "cuda" else torch.bfloat16
+
     best_iou = 0.0
     start_epoch = 0
     os.makedirs(save_dir, exist_ok=True)
@@ -310,13 +331,25 @@ def train_class(
             images = images.to(device)
             masks = masks.to(device).unsqueeze(1)
 
-            logits = model(images)
-            loss = criterion(logits, masks)
-
             optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            with torch.amp.autocast(
+                device_type=device if device in ("cuda", "cpu") else "cpu",
+                dtype=amp_dtype, enabled=use_amp,
+            ):
+                logits = model(images)
+                loss = criterion(logits, masks)
+
+            if use_amp:
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+
             train_loss += loss.item()
 
         scheduler.step()
@@ -340,11 +373,13 @@ def train_class(
                 for i in range(probs.shape[0]):
                     pred_raw = (probs[i] > 0.5).astype(np.uint8)
                     iou = compute_binary_iou(pred_raw, masks_np[i])
-                    all_ious.append(iou)
+                    if iou is not None:
+                        all_ious.append(iou)
 
                     pred_pp = postprocess_mask(probs[i])
                     iou_pp = compute_binary_iou(pred_pp, masks_np[i])
-                    all_ious_pp.append(iou_pp)
+                    if iou_pp is not None:
+                        all_ious_pp.append(iou_pp)
 
         mean_iou = np.mean(all_ious) if all_ious else 0.0
         mean_iou_pp = np.mean(all_ious_pp) if all_ious_pp else 0.0

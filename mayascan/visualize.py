@@ -153,13 +153,11 @@ def compute_openness(dem: np.ndarray, resolution: float = 0.5) -> np.ndarray:
 # Combined visualizations
 # ---------------------------------------------------------------------------
 
-def compute_visualizations(
-    dem: np.ndarray,
-    resolution: float = 0.5,
-) -> np.ndarray:
-    """Stack SVF, openness, and slope into a (3, H, W) float32 array.
+def compute_roughness(dem: np.ndarray, resolution: float = 0.5) -> np.ndarray:
+    """Compute terrain roughness (local standard deviation).
 
-    Each channel is independently normalised to [0, 1].
+    Archaeological structures typically show higher roughness than
+    natural terrain due to abrupt elevation changes.
 
     Parameters
     ----------
@@ -171,9 +169,79 @@ def compute_visualizations(
     Returns
     -------
     np.ndarray
-        Shape (3, H, W), dtype float32.  Channels: [SVF, openness, slope].
+        Roughness array, shape (H, W), dtype float32.
+    """
+    from scipy.ndimage import uniform_filter
+
+    dem64 = dem.astype(np.float64)
+    radius = max(2, int(5 * resolution))
+    size = 2 * radius + 1
+    local_mean = uniform_filter(dem64, size=size, mode="reflect")
+    local_mean_sq = uniform_filter(dem64 ** 2, size=size, mode="reflect")
+    variance = np.maximum(local_mean_sq - local_mean ** 2, 0)
+    return np.sqrt(variance).astype(np.float32)
+
+
+def compute_curvature(dem: np.ndarray, resolution: float = 0.5) -> np.ndarray:
+    """Compute profile curvature from a DEM.
+
+    Curvature highlights convex features (mounds, walls) and concave
+    features (depressions, aguadas) which are key archaeological indicators.
+
+    Parameters
+    ----------
+    dem : np.ndarray
+        2-D elevation array (H, W).
+    resolution : float
+        Cell size.
+
+    Returns
+    -------
+    np.ndarray
+        Curvature array, shape (H, W), dtype float32.
+    """
+    dem64 = dem.astype(np.float64)
+    dy, dx = np.gradient(dem64, resolution)
+    dyy, _ = np.gradient(dy, resolution)
+    _, dxx = np.gradient(dx, resolution)
+    # Laplacian curvature
+    curvature = dxx + dyy
+    return curvature.astype(np.float32)
+
+
+def compute_visualizations(
+    dem: np.ndarray,
+    resolution: float = 0.5,
+    channels: int = 3,
+) -> np.ndarray:
+    """Stack terrain visualizations into a multi-channel float32 array.
+
+    Each channel is independently normalised to [0, 1].
+
+    Parameters
+    ----------
+    dem : np.ndarray
+        2-D elevation array (H, W).
+    resolution : float
+        Cell size.
+    channels : int
+        Number of output channels:
+        - 3: [SVF, openness, slope] (default, backwards compatible)
+        - 5: [SVF, openness, slope, roughness, curvature] (recommended
+          for best accuracy, per npj Heritage Science 2025)
+
+    Returns
+    -------
+    np.ndarray
+        Shape (C, H, W), dtype float32 where C = *channels*.
     """
     svf = _normalize(compute_svf(dem, resolution))
     opns = _normalize(compute_openness(dem, resolution))
     slope = _normalize(compute_slope(dem, resolution))
-    return np.stack([svf, opns, slope], axis=0).astype(np.float32)
+
+    if channels <= 3:
+        return np.stack([svf, opns, slope], axis=0).astype(np.float32)
+
+    roughness = _normalize(compute_roughness(dem, resolution))
+    curvature = _normalize(compute_curvature(dem, resolution))
+    return np.stack([svf, opns, slope, roughness, curvature], axis=0).astype(np.float32)

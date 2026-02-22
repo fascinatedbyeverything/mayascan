@@ -76,7 +76,25 @@ def _scan_single(input_path: str, args: argparse.Namespace, out_dir: Path) -> No
         )
     elif model_dir and discover_v2_models(model_dir):
         v2_models = discover_v2_models(model_dir)
-        if getattr(args, 'multiscale', False):
+        if getattr(args, 'ensemble', False):
+            from mayascan.detect import run_detection_v2_ensemble
+            from mayascan.crossval import discover_fold_models
+            # Count fold models
+            fold_count = sum(
+                len(discover_fold_models(model_dir, cn))
+                for cn in ["building", "platform", "aguada"]
+            )
+            print(f"  Running K-fold ensemble detection ({fold_count} fold models)...")
+            print(f"  TTA: {'enabled (8x)' if args.tta else 'disabled'}")
+            result = run_detection_v2_ensemble(
+                viz,
+                model_dir=model_dir,
+                confidence_threshold=args.threshold,
+                use_tta=args.tta,
+                min_blob_size=args.min_blob,
+                device=args.device,
+            )
+        elif getattr(args, 'multiscale', False):
             from mayascan.multiscale import run_multiscale_detection, DEFAULT_SCALES
             print(f"  Running multi-scale v2 detection ({len(v2_models)} models x {len(DEFAULT_SCALES)} scales)...")
             print(f"  Scales: {DEFAULT_SCALES}")
@@ -321,7 +339,71 @@ def cmd_train(args: argparse.Namespace) -> None:
         lr=args.lr,
         device=device,
         use_tta=args.tta,
+        use_amp=args.amp,
     )
+
+
+def cmd_train_kfold(args: argparse.Namespace) -> None:
+    """Train K-fold cross-validation ensemble models."""
+    from mayascan.crossval import train_kfold, train_kfold_all
+    from mayascan.data import list_available_classes, count_tiles
+
+    import torch
+
+    # Device selection
+    if args.device is not None:
+        device = args.device
+    elif torch.cuda.is_available():
+        device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
+    lidar_dir = os.path.join(args.data_dir, "lidar")
+    mask_dir = os.path.join(args.data_dir, "masks")
+
+    n_tiles = count_tiles(lidar_dir)
+    available = list_available_classes(mask_dir)
+    print(f"MayaScan K-Fold Training")
+    print(f"  Device:  {device}")
+    print(f"  Data:    {args.data_dir} ({n_tiles} tiles)")
+    print(f"  Classes: {', '.join(available)}")
+    print(f"  Arch:    {args.arch} ({args.encoder})")
+    print(f"  Folds:   {args.folds}, Seed: {args.seed}")
+    print(f"  Epochs:  {args.epochs}, Batch: {args.batch_size}, LR: {args.lr}")
+    print(f"  AMP:     {args.amp}")
+
+    kwargs = dict(
+        arch=args.arch,
+        encoder=args.encoder,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        device=device,
+        use_tta=args.tta,
+        use_amp=args.amp,
+    )
+
+    if args.cls == "all":
+        train_kfold_all(
+            lidar_dir=lidar_dir,
+            mask_dir=mask_dir,
+            save_dir=args.save_dir,
+            n_folds=args.folds,
+            seed=args.seed,
+            **kwargs,
+        )
+    else:
+        train_kfold(
+            cls_name=args.cls,
+            lidar_dir=lidar_dir,
+            mask_dir=mask_dir,
+            save_dir=args.save_dir,
+            n_folds=args.folds,
+            seed=args.seed,
+            **kwargs,
+        )
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
@@ -522,6 +604,7 @@ def main() -> None:
     scan_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
     scan_p.add_argument("--min-blob", type=int, default=MIN_BLOB_SIZE, help="Min blob size (pixels)")
     scan_p.add_argument("--multiscale", action="store_true", help="Use multi-scale inference (3 tile sizes)")
+    scan_p.add_argument("--ensemble", action="store_true", help="Use K-fold ensemble (if fold models available)")
     scan_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # info command
@@ -545,7 +628,24 @@ def main() -> None:
     train_p.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size")
     train_p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate")
     train_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
+    train_p.add_argument("--amp", action="store_true", help="Use automatic mixed precision")
     train_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
+
+    # train-kfold command
+    kfold_p = subparsers.add_parser("train-kfold", help="K-fold cross-validation training (ensemble)")
+    kfold_p.add_argument("--data-dir", required=True, help="Data directory (with lidar/ and masks/ subdirs)")
+    kfold_p.add_argument("--save-dir", default="models", help="Directory to save fold model checkpoints")
+    kfold_p.add_argument("--cls", default="all", help="Class to train (building/platform/aguada/all)")
+    kfold_p.add_argument("--folds", type=int, default=5, help="Number of CV folds")
+    kfold_p.add_argument("--seed", type=int, default=42, help="Random seed for fold splitting")
+    kfold_p.add_argument("--arch", default=V2_ARCH, help="Model architecture")
+    kfold_p.add_argument("--encoder", default=V2_ENCODER, help="Encoder backbone")
+    kfold_p.add_argument("--epochs", type=int, default=EPOCHS, help="Number of epochs per fold")
+    kfold_p.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="Batch size")
+    kfold_p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate")
+    kfold_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
+    kfold_p.add_argument("--amp", action="store_true", help="Use automatic mixed precision")
+    kfold_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # evaluate command
     eval_p = subparsers.add_parser("evaluate", help="Evaluate models on validation set")
@@ -590,6 +690,8 @@ def main() -> None:
         cmd_download(args)
     elif args.command == "train":
         cmd_train(args)
+    elif args.command == "train-kfold":
+        cmd_train_kfold(args)
     elif args.command == "evaluate":
         cmd_evaluate(args)
     elif args.command == "benchmark":

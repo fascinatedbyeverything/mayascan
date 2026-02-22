@@ -12,6 +12,7 @@ from mayascan.detect import DetectionResult, GeoInfo
 from mayascan.visualize import compute_visualizations as _compute_visualizations
 from mayascan.detect import run_detection as _run_detection
 from mayascan.detect import run_detection_v2 as _run_detection_v2
+from mayascan.detect import run_detection_v2_ensemble as _run_detection_v2_ensemble
 from mayascan.detect import discover_v2_models
 
 from mayascan.report import generate_report, report_to_text, report_to_html, save_report
@@ -20,6 +21,15 @@ from mayascan.augment import augment_sample, cutmix
 from mayascan.ensemble import average_probabilities, majority_vote, merge_results
 from mayascan.multiscale import run_multiscale_detection
 from mayascan.benchmark import BenchmarkResult, run_benchmark, format_benchmark
+from mayascan.crossval import (
+    FoldSplit,
+    create_folds,
+    fold_summary as cv_fold_summary,
+    train_fold,
+    train_kfold,
+    train_kfold_all,
+    discover_fold_models,
+)
 from mayascan.spatial import (
     Cluster,
     cluster_features,
@@ -55,7 +65,15 @@ __all__ = [
     "visualize",
     "detect",
     "detect_v2",
+    "detect_v2_ensemble",
     "discover_v2_models",
+    "discover_fold_models",
+    "FoldSplit",
+    "create_folds",
+    "cv_fold_summary",
+    "train_fold",
+    "train_kfold",
+    "train_kfold_all",
     "process_dem",
     "read_raster",
     "read_geo_info",
@@ -246,6 +264,42 @@ def detect_v2(
         Dataclass with ``classes``, ``confidence``, and ``class_names``.
     """
     return _run_detection_v2(
+        visualization,
+        model_dir=model_dir,
+        confidence_threshold=confidence_threshold,
+        use_tta=use_tta,
+    )
+
+
+def detect_v2_ensemble(
+    visualization: np.ndarray,
+    model_dir: str = "models",
+    confidence_threshold: float = 0.5,
+    use_tta: bool = True,
+) -> DetectionResult:
+    """Run K-fold ensemble inference for highest accuracy.
+
+    Loads all fold models for each class, averages their predictions,
+    then thresholds and post-processes. Falls back to single-model
+    inference if no fold models are found.
+
+    Parameters
+    ----------
+    visualization : np.ndarray
+        Input raster with shape ``(C, H, W)`` where *C* is typically 3.
+    model_dir : str
+        Directory containing fold model files.
+    confidence_threshold : float
+        Pixels below this confidence are reset to background.
+    use_tta : bool
+        If True, use 8-fold test-time augmentation.
+
+    Returns
+    -------
+    DetectionResult
+        Ensemble detection result.
+    """
+    return _run_detection_v2_ensemble(
         visualization,
         model_dir=model_dir,
         confidence_threshold=confidence_threshold,

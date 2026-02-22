@@ -56,7 +56,14 @@ class TestComputeBinaryIou:
 
     def test_both_empty(self):
         empty = np.zeros((4, 4))
-        assert compute_binary_iou(empty, empty) == 0.0
+        # Both empty = true negative, excluded from IoU averaging
+        assert compute_binary_iou(empty, empty) is None
+
+    def test_only_pred_positive(self):
+        pred = np.ones((4, 4))
+        gt = np.zeros((4, 4))
+        # All false positives → IoU = 0
+        assert compute_binary_iou(pred, gt) == 0.0
 
 
 class TestPostprocessMask:

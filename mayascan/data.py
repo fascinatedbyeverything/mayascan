@@ -59,18 +59,23 @@ class BinarySegmentationDataset(Dataset):
         oversample_positive: bool = True,
         max_oversample: int = 6,
         val_fraction: float = 0.2,
+        tile_paths: list[str] | None = None,
     ):
         self.cls_name = cls_name
         self.mask_dir = mask_dir
         self.augment = augment and (split == "train")
 
-        all_lidar = sorted(glob.glob(os.path.join(lidar_dir, "tile_*_lidar.tif")))
-        if not all_lidar:
-            raise FileNotFoundError(f"No lidar tiles in {lidar_dir}")
+        if tile_paths is not None:
+            # Explicit tile list (for fold-based training)
+            tiles = list(tile_paths)
+        else:
+            all_lidar = sorted(glob.glob(os.path.join(lidar_dir, "tile_*_lidar.tif")))
+            if not all_lidar:
+                raise FileNotFoundError(f"No lidar tiles in {lidar_dir}")
 
-        n = len(all_lidar)
-        split_idx = int(n * (1 - val_fraction))
-        tiles = all_lidar[:split_idx] if split == "train" else all_lidar[split_idx:]
+            n = len(all_lidar)
+            split_idx = int(n * (1 - val_fraction))
+            tiles = all_lidar[:split_idx] if split == "train" else all_lidar[split_idx:]
 
         self.tiles: list[str] = []
         self.has_positive: list[bool] = []
