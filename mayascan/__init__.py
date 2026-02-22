@@ -16,6 +16,7 @@ from mayascan.detect import discover_v2_models
 
 from mayascan.report import generate_report, report_to_text, report_to_html, save_report
 from mayascan.features import Feature, extract_features, filter_features, feature_summary
+from mayascan.augment import augment_sample, cutmix
 
 __all__ = [
     "__version__",
@@ -36,6 +37,8 @@ __all__ = [
     "extract_features",
     "filter_features",
     "feature_summary",
+    "augment_sample",
+    "cutmix",
 ]
 
 
