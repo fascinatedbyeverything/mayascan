@@ -551,6 +551,125 @@ def print_results(metrics: dict[int, ClassMetrics], model_label: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Threshold sweep: find optimal per-class thresholds in one pass
+# ---------------------------------------------------------------------------
+def sweep_thresholds_v2(
+    model_dir: str,
+    arch: str,
+    encoder: str,
+    device: torch.device,
+    use_tta: bool,
+    min_blob_size: int,
+    thresholds: list[float] | None = None,
+) -> dict[int, dict[str, float]]:
+    """Find optimal threshold per class by evaluating at multiple thresholds.
+
+    Returns dict: cls_id -> {"best_threshold": float, "best_iou": float, ...}
+    """
+    if thresholds is None:
+        thresholds = [0.2, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7]
+
+    model_paths = discover_v2_models(model_dir, arch, encoder)
+    if not model_paths:
+        print(f"ERROR: No v2 models found in {model_dir}")
+        sys.exit(1)
+
+    val_lidar, tile_ids, mask_dir = load_validation_set(DATA_DIR)
+
+    # Multi-threshold metrics: {threshold -> {cls_id -> ClassMetrics}}
+    multi_metrics: dict[float, dict[int, ClassMetrics]] = {
+        t: {cls_id: ClassMetrics() for cls_id in V2_CLASSES}
+        for t in thresholds
+    }
+
+    # Load models
+    models: dict[int, torch.nn.Module] = {}
+    for cls_id, mpath in model_paths.items():
+        model, _ = load_v2_model(mpath, arch, encoder, device)
+        models[cls_id] = model
+
+    print(f"\nThreshold sweep: {thresholds}")
+    print(f"  Models: {len(models)}, Tiles: {len(val_lidar)}, TTA: {use_tta}")
+
+    # Single pass through all tiles
+    for i, (lidar_path, tid) in enumerate(zip(val_lidar, tile_ids)):
+        img = load_lidar_tile(lidar_path)
+        img_tensor = torch.from_numpy(img).unsqueeze(0)
+
+        for cls_id, model in models.items():
+            cls_name = V2_CLASSES[cls_id]
+            gt = load_mask(mask_dir, tid, cls_name)
+            if gt is None:
+                gt = np.zeros((TILE_SIZE, TILE_SIZE), dtype=np.float32)
+
+            with torch.no_grad():
+                if use_tta:
+                    probs = predict_with_tta(model, img_tensor, device, binary=True)
+                    prob = probs[0, 0]
+                else:
+                    logits = model(img_tensor.to(device))
+                    prob = torch.sigmoid(logits)[0, 0].cpu().numpy()
+
+            # Evaluate at each threshold
+            for t in thresholds:
+                pred = postprocess_mask(prob, threshold=t, min_blob_size=min_blob_size)
+                update_metrics(multi_metrics[t], pred, gt, cls_id)
+
+        if (i + 1) % 50 == 0 or i == len(val_lidar) - 1:
+            print(f"  [{i+1}/{len(val_lidar)}]")
+
+    del models
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    # Find best threshold per class
+    results: dict[int, dict[str, float]] = {}
+    print(f"\n{'=' * 72}")
+    print(f"  THRESHOLD SWEEP RESULTS")
+    print(f"{'=' * 72}")
+
+    for cls_id in sorted(V2_CLASSES):
+        cls_name = V2_CLASSES[cls_id]
+        best_t = 0.5
+        best_iou = 0.0
+        print(f"\n  {cls_name}:")
+        print(f"    {'Threshold':>10s}  {'IoU':>8s}  {'Precision':>10s}  {'Recall':>8s}  {'F1':>8s}")
+        for t in thresholds:
+            m = multi_metrics[t][cls_id]
+            iou = m.iou
+            prec = m.precision
+            rec = m.recall
+            f1 = m.f1
+            marker = ""
+            if iou > best_iou:
+                best_iou = iou
+                best_t = t
+                marker = " <-- best"
+            print(f"    {t:>10.2f}  {iou:>8.4f}  {prec:>10.4f}  {rec:>8.4f}  {f1:>8.4f}{marker}")
+
+        results[cls_id] = {
+            "best_threshold": best_t,
+            "best_iou": best_iou,
+            "best_precision": multi_metrics[best_t][cls_id].precision,
+            "best_recall": multi_metrics[best_t][cls_id].recall,
+            "best_f1": multi_metrics[best_t][cls_id].f1,
+        }
+
+    print(f"\n{'=' * 72}")
+    print(f"  OPTIMAL THRESHOLDS:")
+    for cls_id in sorted(results):
+        r = results[cls_id]
+        cls_name = V2_CLASSES[cls_id]
+        print(f"    {cls_name:>10s}: threshold={r['best_threshold']:.2f}, "
+              f"IoU={r['best_iou']:.4f}, F1={r['best_f1']:.4f}")
+    mean_best = np.mean([r["best_iou"] for r in results.values()])
+    print(f"    {'mIoU':>10s}: {mean_best:.4f}")
+    print(f"{'=' * 72}\n")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -607,6 +726,10 @@ def main():
         "--data-dir", type=str, default=DATA_DIR,
         help=f"Chactun data directory (default: {DATA_DIR})",
     )
+    parser.add_argument(
+        "--sweep-threshold", action="store_true",
+        help="Find optimal per-class thresholds (evaluates at 9 thresholds)",
+    )
     args = parser.parse_args()
 
     # Validate arguments
@@ -634,7 +757,19 @@ def main():
 
     t0 = time.time()
 
-    if args.model_dir is not None:
+    if args.sweep_threshold and args.model_dir is not None:
+        # Threshold sweep mode
+        sweep_results = sweep_thresholds_v2(
+            model_dir=args.model_dir,
+            arch=args.arch,
+            encoder=args.encoder,
+            device=device,
+            use_tta=args.tta,
+            min_blob_size=args.min_blob_size,
+        )
+        elapsed = time.time() - t0
+        print(f"  Threshold sweep completed in {elapsed:.1f}s")
+    elif args.model_dir is not None:
         # v2 evaluation
         metrics = evaluate_v2(
             model_dir=args.model_dir,
@@ -647,6 +782,9 @@ def main():
             save_viz=args.save_viz,
         )
         model_label = f"v2 {args.arch}/{args.encoder}"
+        elapsed = time.time() - t0
+        print(f"\n  Evaluation completed in {elapsed:.1f}s")
+        print_results(metrics, model_label)
     else:
         # v1 evaluation
         metrics = evaluate_v1(
@@ -657,11 +795,9 @@ def main():
             save_viz=args.save_viz,
         )
         model_label = f"v1 U-Net (resnet34)"
-
-    elapsed = time.time() - t0
-    print(f"\n  Evaluation completed in {elapsed:.1f}s")
-
-    print_results(metrics, model_label)
+        elapsed = time.time() - t0
+        print(f"\n  Evaluation completed in {elapsed:.1f}s")
+        print_results(metrics, model_label)
 
 
 if __name__ == "__main__":

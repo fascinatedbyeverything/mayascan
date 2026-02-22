@@ -663,6 +663,8 @@ def main() -> None:
     eval_p.add_argument("--min-blob", type=int, default=MIN_BLOB_SIZE, help="Min blob size (pixels)")
     eval_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
     eval_p.add_argument("--save-viz", default=None, help="Save overlay visualizations to directory")
+    eval_p.add_argument("--sweep-threshold", action="store_true",
+                        help="Find optimal per-class thresholds (evaluates at 9 thresholds)")
     eval_p.add_argument("--data-dir", default=None, help="Validation data directory")
     eval_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
