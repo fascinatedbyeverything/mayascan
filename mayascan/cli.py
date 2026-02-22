@@ -212,7 +212,7 @@ def cmd_info(args: argparse.Namespace) -> None:
         print(f"\nv1 multi-class model: {os.path.basename(v1_path)} ({size_mb:.0f} MB)")
 
 
-HF_REPO_ID = "fascinated23/mayascan"
+from mayascan.config import HF_REPO_ID, CONFIDENCE_THRESHOLD, MIN_BLOB_SIZE, DEFAULT_RESOLUTION
 
 
 def cmd_download(args: argparse.Namespace) -> None:
@@ -261,6 +261,58 @@ def cmd_download(args: argparse.Namespace) -> None:
     print(f"\nModels saved to {model_dir}/")
 
 
+def cmd_evaluate(args: argparse.Namespace) -> None:
+    """Run model evaluation on the validation set."""
+    # Delegate to the standalone evaluate.py script's logic
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from evaluate import evaluate_v2, evaluate_v1, print_results, DATA_DIR
+
+    import torch
+
+    # Device selection
+    if args.device is not None:
+        device = torch.device(args.device)
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
+    data_dir = args.data_dir or DATA_DIR
+
+    print(f"MayaScan Evaluation")
+    print(f"  Device: {device}")
+    print(f"  Data:   {data_dir}")
+
+    t0 = time.time()
+
+    if args.model:
+        metrics = evaluate_v1(
+            model_path=args.model,
+            device=device,
+            use_tta=args.tta,
+            threshold=args.threshold,
+            save_viz=args.save_viz,
+        )
+        model_label = "v1 U-Net (resnet34)"
+    else:
+        metrics = evaluate_v2(
+            model_dir=args.model_dir,
+            arch=args.arch,
+            encoder=args.encoder,
+            device=device,
+            use_tta=args.tta,
+            threshold=args.threshold,
+            min_blob_size=args.min_blob,
+            save_viz=args.save_viz,
+        )
+        model_label = f"v2 {args.arch}/{args.encoder}"
+
+    print(f"\n  Evaluation completed in {time.time() - t0:.1f}s")
+    print_results(metrics, model_label)
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -275,10 +327,10 @@ def main() -> None:
     scan_p.add_argument("-o", "--output", default="results", help="Output directory")
     scan_p.add_argument("--model-dir", default="models", help="v2 model directory")
     scan_p.add_argument("--model", default=None, help="v1 model path (.pth)")
-    scan_p.add_argument("--threshold", type=float, default=0.5, help="Confidence threshold")
-    scan_p.add_argument("--resolution", type=float, default=0.5, help="DEM resolution (m/px)")
+    scan_p.add_argument("--threshold", type=float, default=CONFIDENCE_THRESHOLD, help="Confidence threshold")
+    scan_p.add_argument("--resolution", type=float, default=DEFAULT_RESOLUTION, help="DEM resolution (m/px)")
     scan_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
-    scan_p.add_argument("--min-blob", type=int, default=50, help="Min blob size (pixels)")
+    scan_p.add_argument("--min-blob", type=int, default=MIN_BLOB_SIZE, help="Min blob size (pixels)")
     scan_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # info command
@@ -291,6 +343,19 @@ def main() -> None:
     dl_p.add_argument("--repo", default=None, help=f"HuggingFace repo ID (default: {HF_REPO_ID})")
     dl_p.add_argument("--force", action="store_true", help="Overwrite existing models")
 
+    # evaluate command
+    eval_p = subparsers.add_parser("evaluate", help="Evaluate models on validation set")
+    eval_p.add_argument("--model-dir", default="models", help="v2 model directory")
+    eval_p.add_argument("--model", default=None, help="v1 model path (.pth)")
+    eval_p.add_argument("--arch", default="deeplabv3plus", help="v2 architecture")
+    eval_p.add_argument("--encoder", default="resnet101", help="v2 encoder backbone")
+    eval_p.add_argument("--threshold", type=float, default=CONFIDENCE_THRESHOLD, help="Confidence threshold")
+    eval_p.add_argument("--min-blob", type=int, default=MIN_BLOB_SIZE, help="Min blob size (pixels)")
+    eval_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
+    eval_p.add_argument("--save-viz", default=None, help="Save overlay visualizations to directory")
+    eval_p.add_argument("--data-dir", default=None, help="Validation data directory")
+    eval_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
+
     # version command
     subparsers.add_parser("version", help="Show MayaScan version")
 
@@ -302,6 +367,8 @@ def main() -> None:
         cmd_info(args)
     elif args.command == "download":
         cmd_download(args)
+    elif args.command == "evaluate":
+        cmd_evaluate(args)
     elif args.command == "version":
         import mayascan
         print(f"MayaScan v{mayascan.__version__}")

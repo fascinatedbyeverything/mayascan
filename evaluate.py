@@ -19,7 +19,6 @@ import glob
 import os
 import sys
 import time
-from dataclasses import dataclass
 
 import numpy as np
 import segmentation_models_pytorch as smp
@@ -27,45 +26,13 @@ import torch
 from PIL import Image
 from scipy import ndimage
 
+from mayascan.config import CLASS_NAMES, V2_CLASSES, TILE_SIZE, V2_ARCH, V2_ENCODER
+from mayascan.metrics import ClassMetrics, format_metrics_table, mean_iou as compute_mean_iou
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 DATA_DIR = "/Volumes/macos4tb/Projects/mayascan/chactun_data/extracted"
-CLASS_NAMES = {0: "background", 1: "building", 2: "platform", 3: "aguada"}
-V2_CLASSES = {1: "building", 2: "platform", 3: "aguada"}
-TILE_SIZE = 480
-
-
-# ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
-@dataclass
-class ClassMetrics:
-    """Accumulated confusion-matrix counts for a single class."""
-    tp: int = 0  # true positive pixels
-    fp: int = 0  # false positive pixels
-    fn: int = 0  # false negative pixels
-    tn: int = 0  # true negative pixels
-
-    @property
-    def iou(self) -> float:
-        denom = self.tp + self.fp + self.fn
-        return self.tp / denom if denom > 0 else 0.0
-
-    @property
-    def precision(self) -> float:
-        denom = self.tp + self.fp
-        return self.tp / denom if denom > 0 else 0.0
-
-    @property
-    def recall(self) -> float:
-        denom = self.tp + self.fn
-        return self.tp / denom if denom > 0 else 0.0
-
-    @property
-    def f1(self) -> float:
-        p, r = self.precision, self.recall
-        return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
 
 
 def update_metrics(
@@ -74,10 +41,7 @@ def update_metrics(
     target: np.ndarray,
     cls_id: int,
 ) -> None:
-    """Update accumulated metrics for one class on a single sample.
-
-    Both pred and target are binary arrays (1 = class present, 0 = absent).
-    """
+    """Update accumulated metrics for one class on a single sample."""
     pred_bool = pred.astype(bool)
     target_bool = target.astype(bool)
     m = metrics[cls_id]
@@ -254,8 +218,8 @@ def load_v2_model(
 
 def discover_v2_models(
     model_dir: str,
-    arch: str = "deeplabv3plus",
-    encoder: str = "resnet101",
+    arch: str = V2_ARCH,
+    encoder: str = V2_ENCODER,
 ) -> dict[int, str]:
     """Find v2 per-class model files. Returns {cls_id: model_path}."""
     found = {}
@@ -551,35 +515,28 @@ def evaluate_v1(
 # ---------------------------------------------------------------------------
 def print_results(metrics: dict[int, ClassMetrics], model_label: str) -> None:
     """Print a formatted results table."""
-    sep = "-" * 72
     print(f"\n{'=' * 72}")
     print(f"  EVALUATION RESULTS — {model_label}")
     print(f"{'=' * 72}")
-    print(f"  {'Class':>12s}  {'IoU':>8s}  {'Prec':>8s}  {'Recall':>8s}  "
-          f"{'F1':>8s}  {'TP':>8s}  {'FP':>8s}  {'FN':>8s}")
-    print(f"  {sep}")
 
-    ious = []
-    f1s = []
+    # Use library formatter for the standard table
+    table = format_metrics_table(metrics, class_names=V2_CLASSES)
+    for line in table.splitlines():
+        print(f"  {line}")
+
+    # Extended info: TP/FP/FN counts
+    print()
+    print(f"  {'Class':>12s}  {'TP':>10s}  {'FP':>10s}  {'FN':>10s}")
+    print(f"  {'-' * 48}")
     for cls_id in sorted(metrics):
         m = metrics[cls_id]
         cls_name = V2_CLASSES.get(cls_id, f"class_{cls_id}")
-        print(f"  {cls_name:>12s}  {m.iou:8.4f}  {m.precision:8.4f}  {m.recall:8.4f}  "
-              f"{m.f1:8.4f}  {m.tp:8d}  {m.fp:8d}  {m.fn:8d}")
-        ious.append(m.iou)
-        f1s.append(m.f1)
+        print(f"  {cls_name:>12s}  {m.tp:10d}  {m.fp:10d}  {m.fn:10d}")
 
-    print(f"  {sep}")
-    n = len(ious)
-    mean_iou = sum(ious) / n if n > 0 else 0.0
-    mean_f1 = sum(f1s) / n if n > 0 else 0.0
-    print(f"  {'Mean':>12s}  {mean_iou:8.4f}  {'':>8s}  {'':>8s}  {mean_f1:8.4f}")
+    miou = compute_mean_iou(metrics)
+    print(f"\n{'=' * 72}")
+    print(f"  mIoU: {miou:.4f}")
     print(f"{'=' * 72}\n")
-
-    # Summary
-    print(f"  mIoU: {mean_iou:.4f}")
-    print(f"  mF1:  {mean_f1:.4f}")
-    print()
 
 
 # ---------------------------------------------------------------------------

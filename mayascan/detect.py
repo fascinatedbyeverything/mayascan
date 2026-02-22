@@ -22,18 +22,18 @@ import segmentation_models_pytorch as smp
 import torch
 from tqdm import tqdm
 
+from mayascan.config import (
+    CLASS_NAMES,
+    V2_CLASSES,
+    TILE_SIZE,
+    TILE_OVERLAP,
+    CONFIDENCE_THRESHOLD,
+    MIN_BLOB_SIZE,
+    V2_ARCH,
+    V2_ENCODER,
+)
 from mayascan.models.unet import MayaScanUNet
 from mayascan.tile import slice_tiles, stitch_tiles
-
-CLASS_NAMES: dict[int, str] = {
-    0: "background",
-    1: "building",
-    2: "platform",
-    3: "aguada",
-}
-
-# v2 model naming convention: mayascan_v2_{class}_{arch}_{encoder}.pth
-V2_CLASSES = {1: "building", 2: "platform", 3: "aguada"}
 
 
 @dataclass
@@ -135,8 +135,8 @@ def _predict_tile_with_tta(
 
 def _load_v2_model(
     model_path: str,
-    arch: str = "deeplabv3plus",
-    encoder: str = "resnet101",
+    arch: str = V2_ARCH,
+    encoder: str = V2_ENCODER,
     device: torch.device | None = None,
 ) -> torch.nn.Module:
     """Load a v2 per-class binary segmentation model."""
@@ -166,8 +166,8 @@ def _load_v2_model(
 
 def discover_v2_models(
     model_dir: str,
-    arch: str = "deeplabv3plus",
-    encoder: str = "resnet101",
+    arch: str = V2_ARCH,
+    encoder: str = V2_ENCODER,
 ) -> dict[int, str]:
     """Find v2 per-class model files in a directory.
 
@@ -185,9 +185,9 @@ def discover_v2_models(
 def run_detection(
     visualization: np.ndarray,
     model_path: str | None = None,
-    tile_size: int = 480,
-    overlap: float = 0.5,
-    confidence_threshold: float = 0.5,
+    tile_size: int = TILE_SIZE,
+    overlap: float = TILE_OVERLAP,
+    confidence_threshold: float = CONFIDENCE_THRESHOLD,
     device: torch.device | str | None = None,
 ) -> DetectionResult:
     """Run tiled v1 multi-class U-Net inference on a visualization raster.
@@ -270,13 +270,13 @@ def run_detection(
 def run_detection_v2(
     visualization: np.ndarray,
     model_dir: str,
-    arch: str = "deeplabv3plus",
-    encoder: str = "resnet101",
-    tile_size: int = 480,
-    overlap: float = 0.5,
-    confidence_threshold: float = 0.5,
+    arch: str = V2_ARCH,
+    encoder: str = V2_ENCODER,
+    tile_size: int = TILE_SIZE,
+    overlap: float = TILE_OVERLAP,
+    confidence_threshold: float = CONFIDENCE_THRESHOLD,
     use_tta: bool = True,
-    min_blob_size: int = 50,
+    min_blob_size: int = MIN_BLOB_SIZE,
     device: torch.device | str | None = None,
 ) -> DetectionResult:
     """Run tiled inference using v2 per-class binary models with TTA.
