@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from mayascan.detect import CLASS_NAMES, DetectionResult, GeoInfo
-from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff
+from mayascan.export import to_csv, to_geojson, to_geotiff, to_confidence_geotiff, to_kml
 from mayascan.report import generate_report, report_to_text, report_to_html, save_report
 
 
@@ -340,3 +340,37 @@ class TestReport:
         assert result_path.exists()
         content = result_path.read_text()
         assert "<html>" in content
+
+
+class TestKmlExport:
+    """Tests for KML export."""
+
+    def test_kml_output(self, detection_result, tmp_path):
+        """KML contains valid XML with placemarks."""
+        kml_path = to_kml(detection_result, tmp_path / "test.kml")
+        assert kml_path.exists()
+        content = kml_path.read_text()
+        assert '<?xml version="1.0"' in content
+        assert "<kml" in content
+        assert "<Placemark>" in content
+        assert "MayaScan" in content
+
+    def test_kml_with_geo(self, tmp_path):
+        """KML uses georeferenced coordinates when available."""
+        classes = np.zeros((50, 50), dtype=np.int64)
+        confidence = np.full((50, 50), 0.1, dtype=np.float32)
+        classes[10:20, 10:20] = 1
+        confidence[10:20, 10:20] = 0.9
+
+        geo = GeoInfo(
+            crs="EPSG:32616",
+            transform=(0.5, 0.0, 500000.0, 0.0, -0.5, 2000000.0),
+            resolution=0.5,
+        )
+        result = DetectionResult(
+            classes=classes, confidence=confidence,
+            class_names=dict(CLASS_NAMES), geo=geo,
+        )
+        kml_path = to_kml(result, tmp_path / "geo.kml")
+        content = kml_path.read_text()
+        assert "500" in content  # coordinates should contain utm-like values

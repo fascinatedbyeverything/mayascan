@@ -338,7 +338,16 @@ def to_geotiff(
             compress="deflate",
         ) as dst:
             dst.write(class_map, 1)
-            # Write class names as band description
+            # Write GDAL color table for QGIS/ArcGIS rendering
+            from rasterio.enums import ColorInterp
+            dst.colorinterp = [ColorInterp.palette]
+            colormap = {
+                0: (0, 0, 0, 0),        # background — transparent
+                1: (255, 60, 60, 180),   # building — red
+                2: (60, 200, 60, 180),   # platform — green
+                3: (50, 120, 255, 180),  # aguada — blue
+            }
+            dst.write_colormap(1, colormap)
             dst.update_tags(
                 classes=json.dumps(result.class_names),
                 software="MayaScan",
@@ -350,7 +359,30 @@ def to_geotiff(
         img = Image.fromarray(class_map, mode="L")
         img.save(str(output_path), format="TIFF")
 
+    # Write QGIS style file alongside the GeoTIFF
+    _write_qml_style(output_path)
+
     return output_path
+
+
+def _write_qml_style(tiff_path: Path) -> None:
+    """Write a QGIS .qml style file for the detection GeoTIFF."""
+    qml_path = tiff_path.with_suffix(".qml")
+    qml_content = """<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.34" styleCategories="AllStyleCategories">
+  <pipe>
+    <rasterrenderer type="paletted" band="1" opacity="0.7">
+      <colorPalette>
+        <paletteEntry color="#00000000" value="0" label="Background" alpha="0"/>
+        <paletteEntry color="#ff3c3c" value="1" label="Building" alpha="180"/>
+        <paletteEntry color="#3cc83c" value="2" label="Platform" alpha="180"/>
+        <paletteEntry color="#3278ff" value="3" label="Aguada" alpha="180"/>
+      </colorPalette>
+    </rasterrenderer>
+  </pipe>
+</qgis>"""
+    with open(qml_path, "w") as f:
+        f.write(qml_content)
 
 
 def to_confidence_geotiff(
@@ -566,4 +598,90 @@ def to_shapefile(
     crs = geo.crs if geo and geo.crs else None
     gdf = gpd.GeoDataFrame(records, crs=crs)
     gdf.to_file(str(output_path))
+    return output_path
+
+
+# KML class colours (aaBBGGRR format for KML)
+_KML_COLORS: dict[str, str] = {
+    "building": "b43c3cff",   # semi-transparent red
+    "platform": "b43cc83c",   # semi-transparent green
+    "aguada": "b4ff7832",     # semi-transparent blue
+}
+
+
+def to_kml(
+    result: DetectionResult,
+    output_path: str | Path,
+    pixel_size: float = 0.5,
+) -> Path:
+    """Export detected features as a KML file for Google Earth.
+
+    Requires georeferenced input with a geographic (lat/lon) or projected CRS.
+    If the CRS is projected (e.g. UTM), coordinates are exported as-is and
+    may not display correctly in Google Earth without reprojection.
+
+    Parameters
+    ----------
+    result : DetectionResult
+        Detection output with georeferencing.
+    output_path : str or Path
+        Destination .kml file path.
+    pixel_size : float
+        Ground resolution in metres per pixel (default 0.5 m).
+
+    Returns
+    -------
+    Path
+        The written KML file path.
+    """
+    output_path = Path(output_path)
+    geo = result.geo
+    components = _extract_components(result, pixel_size)
+
+    placemarks = []
+    for comp in components:
+        cls_name = comp["class"]
+        color = _KML_COLORS.get(cls_name, "b4ffffff")
+
+        # Get centroid coordinates
+        if "geo_x" in comp:
+            cx, cy = comp["geo_x"], comp["geo_y"]
+        else:
+            cx = comp["centroid_x"] * pixel_size
+            cy = comp["centroid_y"] * pixel_size
+
+        # Build placemark
+        placemarks.append(
+            f"""    <Placemark>
+      <name>{cls_name.capitalize()} ({comp['area_m2']:.0f} m²)</name>
+      <description>
+        Class: {cls_name}
+        Area: {comp['area_m2']:.1f} m²
+        Confidence: {comp['confidence']:.2f}
+        Pixels: {comp['pixel_count']}
+      </description>
+      <Style>
+        <IconStyle>
+          <color>{color}</color>
+          <scale>0.8</scale>
+        </IconStyle>
+      </Style>
+      <Point>
+        <coordinates>{cx},{cy},0</coordinates>
+      </Point>
+    </Placemark>"""
+        )
+
+    kml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+  <name>MayaScan Detections</name>
+  <description>Archaeological features detected by MayaScan</description>
+{''.join(placemarks)}
+</Document>
+</kml>"""
+
+    with open(output_path, "w") as f:
+        f.write(kml)
+
     return output_path
