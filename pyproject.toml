@@ -43,7 +43,7 @@ Issues = "https://github.com/fascinatedbyeverything/mayascan/issues"
 mayascan = "mayascan.cli:main"
 
 [project.optional-dependencies]
-geo = ["rasterio>=1.3", "geopandas>=0.13", "shapely>=2.0"]
+geo = ["rasterio>=1.3", "geopandas>=0.13", "shapely>=2.0", "pyproj>=3.5"]
 rvt = ["rvt-py>=2.2"]
 web = ["gradio>=4.0"]
 hub = ["huggingface-hub>=0.20"]
