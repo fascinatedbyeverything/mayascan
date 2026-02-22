@@ -123,7 +123,12 @@ def _load_v2_model(
         in_channels=3,
         classes=1,
     )
-    state = torch.load(model_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    # Handle full checkpoint dict vs bare state_dict
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state = checkpoint["state_dict"]
+    else:
+        state = checkpoint
     model.load_state_dict(state)
     model = model.to(device)
     model.eval()
