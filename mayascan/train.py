@@ -456,7 +456,7 @@ def train_class(
                     optimizer.step()
                 optimizer.zero_grad()
 
-            train_loss += loss.item() * grad_accum_steps
+            train_loss += loss.detach().item() * grad_accum_steps
 
         scheduler.step()
         avg_loss = train_loss / max(len(train_dl), 1)
