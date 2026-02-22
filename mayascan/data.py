@@ -144,7 +144,7 @@ class BinarySegmentationDataset(Dataset):
             mask = np.zeros((h, w), dtype=np.float32)
 
         if self.augment:
-            img, mask = augment_sample(img, mask, use_elastic=False)
+            img, mask = augment_sample(img, mask, use_elastic=True)
 
         return torch.from_numpy(img.copy()), torch.from_numpy(mask.copy())
 

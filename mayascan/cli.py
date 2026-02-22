@@ -340,6 +340,7 @@ def cmd_train(args: argparse.Namespace) -> None:
         device=device,
         use_tta=args.tta,
         use_amp=args.amp,
+        loss_type=args.loss,
     )
 
 
@@ -383,6 +384,7 @@ def cmd_train_kfold(args: argparse.Namespace) -> None:
         device=device,
         use_tta=args.tta,
         use_amp=args.amp,
+        loss_type=args.loss,
     )
 
     if args.cls == "all":
@@ -629,6 +631,8 @@ def main() -> None:
     train_p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate")
     train_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
     train_p.add_argument("--amp", action="store_true", help="Use automatic mixed precision")
+    train_p.add_argument("--loss", default="focal_dice", choices=["focal_dice", "focal_lovasz"],
+                         help="Loss function (default: focal_dice)")
     train_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # train-kfold command
@@ -645,6 +649,8 @@ def main() -> None:
     kfold_p.add_argument("--lr", type=float, default=LEARNING_RATE, help="Learning rate")
     kfold_p.add_argument("--no-tta", dest="tta", action="store_false", help="Disable TTA")
     kfold_p.add_argument("--amp", action="store_true", help="Use automatic mixed precision")
+    kfold_p.add_argument("--loss", default="focal_dice", choices=["focal_dice", "focal_lovasz"],
+                         help="Loss function (default: focal_dice)")
     kfold_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
     # evaluate command

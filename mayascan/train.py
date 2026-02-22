@@ -190,6 +190,24 @@ def compute_binary_iou(preds: np.ndarray, masks: np.ndarray) -> float | None:
     return float(intersection / union)
 
 
+def _make_criterion(loss_type: str = "focal_dice") -> nn.Module:
+    """Create loss function by name.
+
+    Parameters
+    ----------
+    loss_type : str
+        ``"focal_dice"`` or ``"focal_lovasz"``.
+    """
+    if loss_type == "focal_lovasz":
+        from mayascan.losses import FocalLovaszLoss
+        return FocalLovaszLoss(focal_weight=1.0, lovasz_weight=1.0,
+                               alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA)
+    return FocalDiceLoss(
+        focal_weight=1.0, dice_weight=1.0,
+        alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA,
+    )
+
+
 def train_class(
     cls_name: str,
     lidar_dir: str,
@@ -205,6 +223,7 @@ def train_class(
     warmup_epochs: int = 5,
     num_workers: int = 4,
     use_amp: bool = False,
+    loss_type: str = "focal_dice",
 ) -> tuple[float, str]:
     """Train a binary segmentation model for a single class.
 
@@ -279,10 +298,7 @@ def train_class(
     model = _build_model(arch, encoder).to(device)
 
     # Loss
-    criterion = FocalDiceLoss(
-        focal_weight=1.0, dice_weight=1.0,
-        alpha=FOCAL_ALPHA, gamma=FOCAL_GAMMA,
-    )
+    criterion = _make_criterion(loss_type)
 
     # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -330,6 +346,21 @@ def train_class(
         ):
             images = images.to(device)
             masks = masks.to(device).unsqueeze(1)
+
+            # CutMix: 30% of batches get a random rectangular patch swapped
+            if np.random.rand() < 0.3 and images.shape[0] > 1:
+                perm = torch.randperm(images.shape[0])
+                lam = np.random.beta(1.0, 1.0)
+                _, _, h, w = images.shape
+                cut_h = int(h * np.sqrt(1 - lam))
+                cut_w = int(w * np.sqrt(1 - lam))
+                cy, cx = np.random.randint(h), np.random.randint(w)
+                y1 = max(0, cy - cut_h // 2)
+                y2 = min(h, cy + cut_h // 2)
+                x1 = max(0, cx - cut_w // 2)
+                x2 = min(w, cx + cut_w // 2)
+                images[:, :, y1:y2, x1:x2] = images[perm, :, y1:y2, x1:x2]
+                masks[:, :, y1:y2, x1:x2] = masks[perm, :, y1:y2, x1:x2]
 
             optimizer.zero_grad()
             with torch.amp.autocast(

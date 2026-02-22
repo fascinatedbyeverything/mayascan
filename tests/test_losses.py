@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from mayascan.losses import DiceLoss, FocalDiceLoss, FocalLoss
+from mayascan.losses import DiceLoss, FocalDiceLoss, FocalLoss, LovaszLoss, FocalLovaszLoss
 
 
 class TestFocalLoss:
@@ -85,6 +85,56 @@ class TestFocalDiceLoss:
 
     def test_backward(self):
         loss_fn = FocalDiceLoss()
+        logits = torch.randn(2, 1, 16, 16, requires_grad=True)
+        targets = torch.randint(0, 2, (2, 1, 16, 16)).float()
+        loss = loss_fn(logits, targets)
+        loss.backward()
+        assert logits.grad is not None
+        assert logits.grad.shape == logits.shape
+
+
+class TestLovaszLoss:
+    def test_perfect_prediction(self):
+        loss_fn = LovaszLoss()
+        logits = torch.tensor([5.0, 5.0, -5.0, -5.0])
+        targets = torch.tensor([1.0, 1.0, 0.0, 0.0])
+        loss = loss_fn(logits, targets)
+        assert loss.item() < 0.01
+
+    def test_wrong_prediction(self):
+        loss_fn = LovaszLoss()
+        logits = torch.tensor([-5.0, -5.0, 5.0, 5.0])
+        targets = torch.tensor([1.0, 1.0, 0.0, 0.0])
+        loss = loss_fn(logits, targets)
+        assert loss.item() > 0.5
+
+    def test_returns_scalar(self):
+        loss_fn = LovaszLoss()
+        logits = torch.randn(64)
+        targets = torch.randint(0, 2, (64,)).float()
+        loss = loss_fn(logits, targets)
+        assert loss.dim() == 0
+
+    def test_backward(self):
+        loss_fn = LovaszLoss()
+        logits = torch.randn(64, requires_grad=True)
+        targets = torch.randint(0, 2, (64,)).float()
+        loss = loss_fn(logits, targets)
+        loss.backward()
+        assert logits.grad is not None
+
+
+class TestFocalLovaszLoss:
+    def test_combines_both(self):
+        loss_fn = FocalLovaszLoss()
+        logits = torch.randn(2, 1, 16, 16)
+        targets = torch.randint(0, 2, (2, 1, 16, 16)).float()
+        loss = loss_fn(logits, targets)
+        assert loss.dim() == 0
+        assert loss.item() > 0
+
+    def test_backward(self):
+        loss_fn = FocalLovaszLoss()
         logits = torch.randn(2, 1, 16, 16, requires_grad=True)
         targets = torch.randint(0, 2, (2, 1, 16, 16)).float()
         loss = loss_fn(logits, targets)
