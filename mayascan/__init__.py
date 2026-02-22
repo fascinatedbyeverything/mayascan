@@ -15,6 +15,7 @@ from mayascan.detect import run_detection_v2 as _run_detection_v2
 from mayascan.detect import discover_v2_models
 
 from mayascan.report import generate_report, report_to_text, report_to_html, save_report
+from mayascan.features import Feature, extract_features, filter_features, feature_summary
 
 __all__ = [
     "__version__",
@@ -31,6 +32,10 @@ __all__ = [
     "report_to_text",
     "report_to_html",
     "save_report",
+    "Feature",
+    "extract_features",
+    "filter_features",
+    "feature_summary",
 ]
 
 
