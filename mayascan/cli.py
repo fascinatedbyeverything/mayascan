@@ -376,6 +376,32 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
     print_results(metrics, model_label)
 
 
+def cmd_benchmark(args: argparse.Namespace) -> None:
+    """Benchmark inference speed on a DEM or visualization."""
+    import mayascan
+    from mayascan.benchmark import run_benchmark, format_benchmark
+
+    data, geo = mayascan.read_raster(args.input)
+
+    resolution = geo.resolution if geo.crs else args.resolution
+
+    # Convert to visualization if needed
+    if data.ndim == 3 and data.shape[0] == 3:
+        viz = data / 255.0 if data.max() > 1.0 else data
+    elif data.ndim == 3 and data.shape[-1] == 3:
+        viz = (data / 255.0).transpose(2, 0, 1).astype(np.float32)
+    else:
+        dem = data if data.ndim == 2 else data[0]
+        print(f"Computing terrain visualizations...")
+        viz = mayascan.visualize(dem, resolution=resolution)
+
+    print(f"Input: {args.input} ({viz.shape[1]}x{viz.shape[2]} pixels)")
+    print(f"Running benchmarks...\n")
+
+    results = run_benchmark(viz, model_dir=args.model_dir, device=args.device)
+    print(format_benchmark(results))
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -433,6 +459,13 @@ def main() -> None:
     eval_p.add_argument("--data-dir", default=None, help="Validation data directory")
     eval_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
 
+    # benchmark command
+    bench_p = subparsers.add_parser("benchmark", help="Benchmark inference speed")
+    bench_p.add_argument("input", help="Input DEM or visualization file")
+    bench_p.add_argument("--model-dir", default="models", help="v2 model directory")
+    bench_p.add_argument("--resolution", type=float, default=DEFAULT_RESOLUTION, help="DEM resolution (m/px)")
+    bench_p.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
+
     # version command
     subparsers.add_parser("version", help="Show MayaScan version")
 
@@ -448,6 +481,8 @@ def main() -> None:
         cmd_train(args)
     elif args.command == "evaluate":
         cmd_evaluate(args)
+    elif args.command == "benchmark":
+        cmd_benchmark(args)
     elif args.command == "version":
         import mayascan
         print(f"MayaScan v{mayascan.__version__}")

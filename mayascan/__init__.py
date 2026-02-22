@@ -19,6 +19,7 @@ from mayascan.features import Feature, extract_features, filter_features, featur
 from mayascan.augment import augment_sample, cutmix
 from mayascan.ensemble import average_probabilities, majority_vote, merge_results
 from mayascan.multiscale import run_multiscale_detection
+from mayascan.benchmark import BenchmarkResult, run_benchmark, format_benchmark
 
 __all__ = [
     "__version__",
@@ -45,6 +46,9 @@ __all__ = [
     "majority_vote",
     "merge_results",
     "run_multiscale_detection",
+    "BenchmarkResult",
+    "run_benchmark",
+    "format_benchmark",
 ]
 
 
