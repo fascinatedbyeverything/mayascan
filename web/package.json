@@ -1,0 +1,21 @@
+{
+  "name": "mayascan-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ./scripts/copy-runtime-libs.mjs",
+    "postinstall": "npm run build",
+    "check": "npm run build && wrangler deploy --dry-run",
+    "dev": "npm run build && wrangler dev --port 8787",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "geotiff": "^2.1.3",
+    "maplibre-gl": "^5.5.0",
+    "onnxruntime-web": "^1.22.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.12.0"
+  }
+}

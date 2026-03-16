@@ -1,0 +1,10 @@
+{
+  "name": "Synthetic Yucatan DEM",
+  "width": 512,
+  "height": 512,
+  "resolution": 0.5,
+  "crs": "EPSG:4326",
+  "transform": [0.000045, 0, -89.61024, 0, -0.000045, 19.52304],
+  "bounds": [-89.61024, 19.50000, -89.58720, 19.52304],
+  "dataUrl": "./sample/sample-dem.bin"
+}

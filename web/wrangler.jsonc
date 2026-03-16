@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mayascan-web",
+  "compatibility_date": "2026-03-16",
+  "assets": {
+    "directory": "./public"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MODEL_BUCKET",
+      "bucket_name": "mayascan-models",
+      "preview_bucket_name": "mayascan-models"
+    }
+  ]
+}

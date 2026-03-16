@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MayaScan Web</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230f1416'/%3E%3Cpath d='M15 46 25 16h7l10 21 10-21h7L49 46h-6l-8-17-8 17h-6z' fill='%23d9b16a'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./lib/maplibre-gl.css" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Archaeological LiDAR Analysis</p>
+          <h1>MayaScan Web</h1>
+          <p class="lede">
+            Fully client-side DEM analysis with terrain visualization, tiled ONNX inference,
+            geospatial overlays, and field exports.
+          </p>
+        </div>
+        <div class="status-stack">
+          <div class="status-pill" id="gpu-status">Checking WebGPU...</div>
+          <div class="status-pill" id="map-status">Map idle.</div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel controls">
+          <div class="panel-head">
+            <h2>Upload</h2>
+            <p>Drop a DEM GeoTIFF, or start with the bundled sample terrain.</p>
+          </div>
+
+          <button class="dropzone" id="dropzone" type="button">
+            <span class="dropzone-title">Drop GeoTIFF here</span>
+            <span class="dropzone-subtitle">or click to browse</span>
+            <input id="file-input" type="file" accept=".tif,.tiff" hidden />
+          </button>
+
+          <div class="file-meta" id="file-meta">No raster loaded.</div>
+
+          <div class="actions">
+            <button class="secondary" id="sample-button" type="button">Try Sample</button>
+            <button class="primary" id="run-button" type="button" disabled>Run Analysis</button>
+          </div>
+
+          <div class="panel-head compact">
+            <h2>Settings</h2>
+          </div>
+
+          <label class="field">
+            <span>Model base URL</span>
+            <input id="model-base-url" type="url" placeholder="https://your-public-models.example.com" />
+          </label>
+
+          <label class="field">
+            <span>Model precision</span>
+            <select id="precision-mode">
+              <option value="auto">Auto (FP16 on WebGPU, INT8 on WASM)</option>
+              <option value="fp16">FP16</option>
+              <option value="int8">INT8</option>
+              <option value="fp32">FP32</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Confidence threshold <strong id="threshold-value">0.50</strong></span>
+            <input id="threshold" type="range" min="0.1" max="0.9" step="0.01" value="0.5" />
+          </label>
+
+          <label class="field">
+            <span>Overlay opacity <strong id="opacity-value">0.72</strong></span>
+            <input id="opacity" type="range" min="0.05" max="1" step="0.01" value="0.72" />
+          </label>
+
+          <label class="toggle">
+            <input id="tta-toggle" type="checkbox" checked />
+            <span>8-orientation test-time augmentation</span>
+          </label>
+
+          <div class="progress-shell">
+            <div class="progress-track">
+              <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <p id="progress-label">Ready for GeoTIFF upload.</p>
+          </div>
+
+          <div class="actions exports">
+            <button class="secondary" id="export-geojson" type="button" disabled>Export GeoJSON</button>
+            <button class="secondary" id="export-csv" type="button" disabled>Export CSV</button>
+            <button class="secondary" id="export-png" type="button" disabled>Export PNG</button>
+          </div>
+        </section>
+
+        <section class="panel visual-panel">
+          <div class="panel-head">
+            <h2>Results Map</h2>
+            <p>Satellite basemap with vector detections and raster overlay.</p>
+          </div>
+          <div id="map" class="map"></div>
+
+          <div class="canvas-grid">
+            <div class="canvas-card">
+              <div class="canvas-head">
+                <h3>Terrain Visualization</h3>
+                <p>SVF, openness, and slope</p>
+              </div>
+              <canvas id="terrain-canvas"></canvas>
+            </div>
+            <div class="canvas-card">
+              <div class="canvas-head">
+                <h3>Detection Overlay</h3>
+                <p>Building, platform, aguada mask</p>
+              </div>
+              <canvas id="overlay-canvas"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel analytics">
+          <div class="panel-head">
+            <h2>Statistics</h2>
+            <p>Counts, area coverage, and confidence buckets by class.</p>
+          </div>
+          <div class="stats-panel" id="stats-panel"></div>
+
+          <div class="panel-head compact">
+            <h2>Detected Features</h2>
+            <p>Click an entry to center the map on that feature.</p>
+          </div>
+          <div class="feature-list" id="feature-list">
+            <p class="empty">Feature summaries appear after inference.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./lib/ort.min.js"></script>
+    <script src="./lib/geotiff.min.js"></script>
+    <script src="./lib/maplibre-gl.js"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
