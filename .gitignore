@@ -17,3 +17,10 @@ models/
 train_v2.log
 .cache/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+web/node_modules/
+web/.wrangler/

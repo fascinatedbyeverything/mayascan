@@ -21,7 +21,7 @@ Upload a LiDAR DEM, get back a map of probable ancient structures — buildings,
 - **Focal + Dice loss** — handles extreme class imbalance (aguadas are <0.3% of pixels)
 - **Morphological post-processing** — closing/opening to clean feature boundaries + blob filtering
 - **Batch processing** — process entire survey directories in one command
-- **Web interface** — Gradio app with interactive overlay visualization and multi-scale option
+- **Web interfaces** — browser-based `web/` app for client-side inference plus legacy Gradio app
 - **HuggingFace integration** — auto-download pre-trained models, upload with model card generation
 - **Reusable training pipeline** — modular data loading, losses, augmentation, and training loop
 - **Shape analysis** — compactness, elongation, rectangularity, and solidity metrics per feature
@@ -42,7 +42,7 @@ With optional dependencies:
 ```bash
 pip install mayascan[geo]     # rasterio, geopandas — for georeferenced I/O
 pip install mayascan[rvt]     # rvt-py — high-quality terrain visualizations
-pip install mayascan[web]     # gradio — web interface
+pip install mayascan[web]     # gradio — legacy Python web interface
 pip install mayascan[hub]     # huggingface-hub — model download
 pip install mayascan[all]     # everything
 ```
@@ -137,10 +137,31 @@ hierarchy = mayascan.settlement_hierarchy(clusters)
 ### Web App
 
 ```bash
+cd web
+npm install
+npm run dev
+```
+
+Starts the browser-native MayaScan app from `web/`, including the static upload UI,
+MapLibre results view, and ONNX Runtime Web pipeline.
+
+### Legacy Gradio App
+
+```bash
 python app.py
 ```
 
-Opens a Gradio interface where you can upload DEMs, adjust confidence thresholds, enable multi-scale inference, and visualize detections with adjustable overlay opacity. Downloads include all export formats.
+Opens the legacy Gradio interface for local Python-backed experimentation.
+
+## Development
+
+```bash
+make check-python   # scoped lint + mypy + typing stats + test discovery + pytest
+make web-check      # verify the browser app
+make check          # run both
+```
+
+See `CONTRIBUTING.md` for the day-to-day development loops.
 
 ## Architecture
 
@@ -292,6 +313,7 @@ mayascan version
 ```
 mayascan/
 ├── __init__.py          # Public API
+├── _optional.py         # Lazy optional-dependency imports with actionable errors
 ├── config.py            # Centralized configuration constants
 ├── detect.py            # Detection pipeline (v1 multi-class, v2 per-class binary)
 ├── visualize.py         # SVF, openness, slope from DEMs
@@ -315,13 +337,15 @@ mayascan/
 ├── crs.py               # Coordinate reference system utilities
 ├── classify.py          # Ground-point classification (PDAL)
 ├── cli.py               # CLI (scan, train, evaluate, benchmark, info, download, version)
+├── py.typed             # PEP 561 typing marker
 ├── models/
 │   └── unet.py          # U-Net wrapper
-├── app.py               # Gradio web interface
+├── app.py               # Legacy Gradio web interface
 ├── train_v2.py          # Standalone training script
 ├── evaluate.py          # Model evaluation
 ├── upload_models.py     # HuggingFace model upload with model card
-└── tests/               # 318 tests
+├── tests/               # Python test suite
+└── web/                 # Static browser app and deployment config
 ```
 
 ## Performance
