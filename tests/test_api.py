@@ -1,10 +1,14 @@
 """Tests for the mayascan top-level public API."""
 
+import importlib.util
+
 import numpy as np
 import pytest
 
 import mayascan
 from mayascan.detect import DetectionResult, GeoInfo
+
+HAS_SMP = importlib.util.find_spec("segmentation_models_pytorch") is not None
 
 
 class TestPublicAPI:
@@ -31,6 +35,7 @@ class TestPublicAPI:
             assert result[ch].min() >= 0.0
             assert result[ch].max() <= 1.0 + 1e-6
 
+    @pytest.mark.skipif(not HAS_SMP, reason="segmentation-models-pytorch is not installed")
     def test_detect_api(self):
         """mayascan.detect(viz) returns DetectionResult with correct shape."""
         rng = np.random.default_rng(7)
@@ -46,6 +51,7 @@ class TestPublicAPI:
         assert result.confidence.min() >= 0.0
         assert result.confidence.max() <= 1.0
 
+    @pytest.mark.skipif(not HAS_SMP, reason="segmentation-models-pytorch is not installed")
     def test_process_dem(self):
         """mayascan.process_dem(dem) runs the full pipeline and returns DetectionResult."""
         rng = np.random.default_rng(123)

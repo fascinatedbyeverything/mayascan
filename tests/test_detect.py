@@ -5,8 +5,12 @@ import tempfile
 
 import numpy as np
 import pytest
-import segmentation_models_pytorch as smp
 import torch
+
+smp = pytest.importorskip(
+    "segmentation_models_pytorch",
+    reason="Detection model tests require segmentation-models-pytorch.",
+)
 
 from mayascan.detect import (
     CLASS_NAMES,

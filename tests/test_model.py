@@ -3,6 +3,11 @@
 import torch
 import pytest
 
+pytest.importorskip(
+    "segmentation_models_pytorch",
+    reason="U-Net wrapper tests require segmentation-models-pytorch.",
+)
+
 from mayascan.models.unet import MayaScanUNet
 
 

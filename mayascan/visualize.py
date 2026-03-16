@@ -8,8 +8,10 @@ dependencies.
 
 from __future__ import annotations
 
-import numpy as np
+import sys
+from types import ModuleType
 
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -245,3 +247,18 @@ def compute_visualizations(
     roughness = _normalize(compute_roughness(dem, resolution))
     curvature = _normalize(compute_curvature(dem, resolution))
     return np.stack([svf, opns, slope, roughness, curvature], axis=0).astype(np.float32)
+
+
+def visualize(dem: np.ndarray, resolution: float = 0.5) -> np.ndarray:
+    """Convenience wrapper mirroring the package-level ``mayascan.visualize`` API."""
+    return compute_visualizations(dem, resolution=resolution)
+
+
+class _CallableVisualizeModule(ModuleType):
+    """Allow ``mayascan.visualize(dem)`` to work even after submodule imports."""
+
+    def __call__(self, dem: np.ndarray, resolution: float = 0.5) -> np.ndarray:
+        return visualize(dem, resolution=resolution)
+
+
+sys.modules[__name__].__class__ = _CallableVisualizeModule

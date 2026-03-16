@@ -2,61 +2,78 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable, cast
 
 import numpy as np
 
 __version__ = "0.7.0"
 
-from mayascan.detect import DetectionResult, GeoInfo
-from mayascan.visualize import compute_visualizations as _compute_visualizations
-from mayascan.detect import run_detection as _run_detection
-from mayascan.detect import run_detection_v2 as _run_detection_v2
-from mayascan.detect import run_detection_v2_ensemble as _run_detection_v2_ensemble
-from mayascan.detect import discover_v2_models
+if TYPE_CHECKING:
+    from mayascan.benchmark import BenchmarkResult
+    from mayascan.comparison import ComparisonResult
+    from mayascan.crossval import FoldSplit
+    from mayascan.detect import DetectionResult, GeoInfo
+    from mayascan.features import Feature
+    from mayascan.heatmap import (
+        class_density_maps,
+        density_to_rgba,
+        feature_density_map,
+        save_density_png,
+    )
+    from mayascan.morphology import FeatureProfile, ShapeDescriptors
+    from mayascan.spatial import Cluster
 
-from mayascan.report import generate_report, report_to_text, report_to_html, save_report
-from mayascan.features import Feature, extract_features, filter_features, feature_summary
-from mayascan.augment import augment_sample, cutmix
-from mayascan.ensemble import average_probabilities, majority_vote, merge_results
-from mayascan.multiscale import run_multiscale_detection
-from mayascan.benchmark import BenchmarkResult, run_benchmark, format_benchmark
-from mayascan.crossval import (
-    FoldSplit,
-    create_folds,
-    fold_summary as cv_fold_summary,
-    train_fold,
-    train_kfold,
-    train_kfold_all,
-    discover_fold_models,
-)
-from mayascan.spatial import (
-    Cluster,
-    cluster_features,
-    identify_site_core,
-    settlement_hierarchy,
-)
-from mayascan.heatmap import (
-    feature_density_map,
-    class_density_maps,
-    density_to_rgba,
-    save_density_png,
-)
-from mayascan.comparison import (
-    ComparisonResult,
-    compare_detections,
-    comparison_summary,
-    difference_map,
-    count_feature_changes,
-)
-from mayascan.morphology import (
-    ShapeDescriptors,
-    FeatureProfile,
-    compute_shape_descriptors,
-    analyze_features,
-    classify_structure,
-    settlement_summary,
-)
+
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "DetectionResult": ("mayascan.detect", "DetectionResult"),
+    "GeoInfo": ("mayascan.detect", "GeoInfo"),
+    "discover_v2_models": ("mayascan.detect", "discover_v2_models"),
+    "discover_fold_models": ("mayascan.crossval", "discover_fold_models"),
+    "generate_report": ("mayascan.report", "generate_report"),
+    "report_to_text": ("mayascan.report", "report_to_text"),
+    "report_to_html": ("mayascan.report", "report_to_html"),
+    "save_report": ("mayascan.report", "save_report"),
+    "Feature": ("mayascan.features", "Feature"),
+    "extract_features": ("mayascan.features", "extract_features"),
+    "filter_features": ("mayascan.features", "filter_features"),
+    "feature_summary": ("mayascan.features", "feature_summary"),
+    "augment_sample": ("mayascan.augment", "augment_sample"),
+    "cutmix": ("mayascan.augment", "cutmix"),
+    "average_probabilities": ("mayascan.ensemble", "average_probabilities"),
+    "majority_vote": ("mayascan.ensemble", "majority_vote"),
+    "merge_results": ("mayascan.ensemble", "merge_results"),
+    "run_multiscale_detection": ("mayascan.multiscale", "run_multiscale_detection"),
+    "BenchmarkResult": ("mayascan.benchmark", "BenchmarkResult"),
+    "run_benchmark": ("mayascan.benchmark", "run_benchmark"),
+    "format_benchmark": ("mayascan.benchmark", "format_benchmark"),
+    "FoldSplit": ("mayascan.crossval", "FoldSplit"),
+    "create_folds": ("mayascan.crossval", "create_folds"),
+    "cv_fold_summary": ("mayascan.crossval", "fold_summary"),
+    "train_fold": ("mayascan.crossval", "train_fold"),
+    "train_kfold": ("mayascan.crossval", "train_kfold"),
+    "train_kfold_all": ("mayascan.crossval", "train_kfold_all"),
+    "Cluster": ("mayascan.spatial", "Cluster"),
+    "cluster_features": ("mayascan.spatial", "cluster_features"),
+    "identify_site_core": ("mayascan.spatial", "identify_site_core"),
+    "settlement_hierarchy": ("mayascan.spatial", "settlement_hierarchy"),
+    "feature_density_map": ("mayascan.heatmap", "feature_density_map"),
+    "class_density_maps": ("mayascan.heatmap", "class_density_maps"),
+    "density_to_rgba": ("mayascan.heatmap", "density_to_rgba"),
+    "save_density_png": ("mayascan.heatmap", "save_density_png"),
+    "ComparisonResult": ("mayascan.comparison", "ComparisonResult"),
+    "compare_detections": ("mayascan.comparison", "compare_detections"),
+    "comparison_summary": ("mayascan.comparison", "comparison_summary"),
+    "difference_map": ("mayascan.comparison", "difference_map"),
+    "count_feature_changes": ("mayascan.comparison", "count_feature_changes"),
+    "ShapeDescriptors": ("mayascan.morphology", "ShapeDescriptors"),
+    "FeatureProfile": ("mayascan.morphology", "FeatureProfile"),
+    "compute_shape_descriptors": ("mayascan.morphology", "compute_shape_descriptors"),
+    "analyze_features": ("mayascan.morphology", "analyze_features"),
+    "classify_structure": ("mayascan.morphology", "classify_structure"),
+    "settlement_summary": ("mayascan.morphology", "settlement_summary"),
+}
 
 __all__ = [
     "__version__",
@@ -116,21 +133,25 @@ __all__ = [
 ]
 
 
-def read_geo_info(path: str | Path) -> GeoInfo:
-    """Read georeferencing metadata from a raster file.
+def __getattr__(name: str):
+    """Load public exports lazily to keep package import lightweight."""
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-    Parameters
-    ----------
-    path : str or Path
-        Path to a GeoTIFF or other rasterio-supported file.
+    module_name, attribute_name = _LAZY_EXPORTS[name]
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
 
-    Returns
-    -------
-    GeoInfo
-        CRS, affine transform, bounds, and resolution.
-        Fields are None if rasterio is unavailable or the file
-        lacks georeferencing.
-    """
+
+def __dir__() -> list[str]:
+    """Expose lazy exports to interactive tooling."""
+    return sorted(set(globals()) | set(__all__))
+
+
+def read_geo_info(path: str | Path) -> "GeoInfo":
+    """Read georeferencing metadata from a raster file."""
+    geo_cls = __getattr__("GeoInfo")
     path = Path(path)
     try:
         import rasterio
@@ -140,29 +161,17 @@ def read_geo_info(path: str | Path) -> GeoInfo:
             transform = tuple(src.transform)[:6] if src.transform else None
             bounds = tuple(src.bounds) if src.bounds else None
             res = src.res[0] if src.res else 0.5
-            return GeoInfo(crs=crs, transform=transform, bounds=bounds, resolution=res)
+            return geo_cls(crs=crs, transform=transform, bounds=bounds, resolution=res)
     except (ImportError, Exception):
-        return GeoInfo()
+        return geo_cls()
 
 
-def read_raster(path: str | Path) -> tuple[np.ndarray, GeoInfo]:
-    """Load a raster file and its georeferencing metadata.
-
-    Parameters
-    ----------
-    path : str or Path
-        Path to a GeoTIFF (.tif), or NumPy (.npy) file.
-
-    Returns
-    -------
-    data : np.ndarray
-        Raster data as float32. For single-band: (H, W). For multi-band: (C, H, W).
-    geo : GeoInfo
-        Georeferencing metadata (CRS, transform, bounds, resolution).
-    """
+def read_raster(path: str | Path) -> tuple[np.ndarray, "GeoInfo"]:
+    """Load a raster file and its georeferencing metadata."""
+    geo_cls = __getattr__("GeoInfo")
     path = Path(path)
     suffix = path.suffix.lower()
-    geo = GeoInfo()
+    geo = geo_cls()
 
     if suffix in (".tif", ".tiff"):
         try:
@@ -194,45 +203,22 @@ def read_raster(path: str | Path) -> tuple[np.ndarray, GeoInfo]:
 
 
 def visualize(dem: np.ndarray, resolution: float = 0.5) -> np.ndarray:
-    """Compute SVF, openness, and slope visualizations from a DEM.
-
-    Parameters
-    ----------
-    dem : np.ndarray
-        2-D elevation array (H, W).
-    resolution : float
-        Cell size in the same unit as the elevation values (default 0.5).
-
-    Returns
-    -------
-    np.ndarray
-        Shape (3, H, W), dtype float32.  Channels: [SVF, openness, slope].
-    """
-    return _compute_visualizations(dem, resolution=resolution)
+    """Compute SVF, openness, and slope visualizations from a DEM."""
+    compute_visualizations = cast(
+        Callable[[np.ndarray, float], np.ndarray],
+        import_module("mayascan.visualize").compute_visualizations,
+    )
+    return compute_visualizations(dem, resolution)
 
 
 def detect(
     visualization: np.ndarray,
     model_path: str | None = None,
     confidence_threshold: float = 0.5,
-) -> DetectionResult:
-    """Run tiled U-Net inference on a visualization raster.
-
-    Parameters
-    ----------
-    visualization : np.ndarray
-        Input raster with shape ``(C, H, W)`` where *C* is typically 3.
-    model_path : str or None
-        Path to saved model weights.  If *None*, random weights are used.
-    confidence_threshold : float
-        Pixels below this confidence are reset to background.
-
-    Returns
-    -------
-    DetectionResult
-        Dataclass with ``classes``, ``confidence``, and ``class_names``.
-    """
-    return _run_detection(
+) -> "DetectionResult":
+    """Run tiled U-Net inference on a visualization raster."""
+    run_detection = import_module("mayascan.detect").run_detection
+    return run_detection(
         visualization,
         model_path=model_path,
         confidence_threshold=confidence_threshold,
@@ -244,26 +230,10 @@ def detect_v2(
     model_dir: str = "models",
     confidence_threshold: float = 0.5,
     use_tta: bool = True,
-) -> DetectionResult:
-    """Run v2 per-class binary model inference with TTA.
-
-    Parameters
-    ----------
-    visualization : np.ndarray
-        Input raster with shape ``(C, H, W)`` where *C* is typically 3.
-    model_dir : str
-        Directory containing per-class model files.
-    confidence_threshold : float
-        Pixels below this confidence are reset to background.
-    use_tta : bool
-        If True, use 8-fold test-time augmentation.
-
-    Returns
-    -------
-    DetectionResult
-        Dataclass with ``classes``, ``confidence``, and ``class_names``.
-    """
-    return _run_detection_v2(
+) -> "DetectionResult":
+    """Run v2 per-class binary model inference with TTA."""
+    run_detection_v2 = import_module("mayascan.detect").run_detection_v2
+    return run_detection_v2(
         visualization,
         model_dir=model_dir,
         confidence_threshold=confidence_threshold,
@@ -276,30 +246,10 @@ def detect_v2_ensemble(
     model_dir: str = "models",
     confidence_threshold: float = 0.5,
     use_tta: bool = True,
-) -> DetectionResult:
-    """Run K-fold ensemble inference for highest accuracy.
-
-    Loads all fold models for each class, averages their predictions,
-    then thresholds and post-processes. Falls back to single-model
-    inference if no fold models are found.
-
-    Parameters
-    ----------
-    visualization : np.ndarray
-        Input raster with shape ``(C, H, W)`` where *C* is typically 3.
-    model_dir : str
-        Directory containing fold model files.
-    confidence_threshold : float
-        Pixels below this confidence are reset to background.
-    use_tta : bool
-        If True, use 8-fold test-time augmentation.
-
-    Returns
-    -------
-    DetectionResult
-        Ensemble detection result.
-    """
-    return _run_detection_v2_ensemble(
+) -> "DetectionResult":
+    """Run K-fold ensemble inference for highest accuracy."""
+    run_detection_v2_ensemble = import_module("mayascan.detect").run_detection_v2_ensemble
+    return run_detection_v2_ensemble(
         visualization,
         model_dir=model_dir,
         confidence_threshold=confidence_threshold,
@@ -312,27 +262,12 @@ def process_dem(
     resolution: float = 0.5,
     model_path: str | None = None,
     confidence_threshold: float = 0.5,
-) -> DetectionResult:
-    """Run the full MayaScan pipeline: visualize a DEM then detect features.
-
-    Parameters
-    ----------
-    dem : np.ndarray
-        2-D elevation array (H, W).
-    resolution : float
-        Cell size (default 0.5).
-    model_path : str or None
-        Path to saved model weights.  If *None*, random weights are used.
-    confidence_threshold : float
-        Pixels below this confidence are reset to background.
-
-    Returns
-    -------
-    DetectionResult
-        Dataclass with ``classes``, ``confidence``, and ``class_names``.
-    """
-    viz = _compute_visualizations(dem, resolution=resolution)
-    return _run_detection(
+) -> "DetectionResult":
+    """Run the full MayaScan pipeline: visualize a DEM then detect features."""
+    compute_visualizations = import_module("mayascan.visualize").compute_visualizations
+    run_detection = import_module("mayascan.detect").run_detection
+    viz = compute_visualizations(dem, resolution=resolution)
+    return run_detection(
         viz,
         model_path=model_path,
         confidence_threshold=confidence_threshold,

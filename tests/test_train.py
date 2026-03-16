@@ -4,6 +4,11 @@ import numpy as np
 import pytest
 import torch
 
+pytest.importorskip(
+    "segmentation_models_pytorch",
+    reason="Training model-construction tests require segmentation-models-pytorch.",
+)
+
 from mayascan.train import (
     _build_model,
     compute_binary_iou,

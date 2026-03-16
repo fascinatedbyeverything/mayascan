@@ -1,8 +1,11 @@
 """U-Net wrapper for archaeological feature segmentation."""
 
-import segmentation_models_pytorch as smp
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
+
+from mayascan._optional import import_optional
 
 
 class MayaScanUNet(nn.Module):
@@ -29,6 +32,11 @@ class MayaScanUNet(nn.Module):
         pretrained: bool = True,
     ) -> None:
         super().__init__()
+        smp = import_optional(
+            "segmentation_models_pytorch",
+            feature="MayaScanUNet",
+            install_hint="pip install -e '.[dev]' or pip install segmentation-models-pytorch",
+        )
         self.num_classes = num_classes
         self.net = smp.Unet(
             encoder_name=encoder,

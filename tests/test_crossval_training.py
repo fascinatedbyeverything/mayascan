@@ -1,6 +1,7 @@
 """Tests for cross-validation training and fold ensemble inference."""
 
 import importlib
+import importlib.util
 import os
 import tempfile
 
@@ -15,6 +16,8 @@ from mayascan.crossval import (
     fold_summary,
 )
 from mayascan.data import BinarySegmentationDataset
+
+HAS_SMP = importlib.util.find_spec("segmentation_models_pytorch") is not None
 
 
 @pytest.fixture
@@ -218,6 +221,8 @@ class TestAMPTraining:
 
     def test_build_model_accepts_various_encoders(self):
         """_build_model should support multiple architectures."""
+        if not HAS_SMP:
+            pytest.skip("segmentation-models-pytorch is not installed")
         from mayascan.train import _build_model
         # Just check it doesn't error for valid arch names
         for arch in ["deeplabv3plus", "unetplusplus", "unet"]:

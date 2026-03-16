@@ -17,6 +17,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from mayascan._optional import import_optional
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -82,6 +84,7 @@ class DINOv2Encoder(nn.Module):
         use_lora: bool = False,
         lora_rank: int = 8,
         lora_alpha: int = 16,
+        backbone: nn.Module | None = None,
     ):
         super().__init__()
         self.encoder_name = encoder_name
@@ -89,10 +92,16 @@ class DINOv2Encoder(nn.Module):
         self.feature_layers = DINOV2_FEATURE_LAYERS[encoder_name]
         self.patch_size = 14
 
-        from transformers import Dinov2Model
-
-        hub_name = DINOV2_MODELS[encoder_name]
-        self.backbone = Dinov2Model.from_pretrained(hub_name)
+        if backbone is not None:
+            self.backbone = backbone
+        else:
+            transformers = import_optional(
+                "transformers",
+                feature="DINOv2 foundation models",
+                install_hint="pip install -e '.[foundation]' or pip install transformers",
+            )
+            hub_name = DINOV2_MODELS[encoder_name]
+            self.backbone = transformers.Dinov2Model.from_pretrained(hub_name)
 
         self.register_buffer(
             "pixel_mean", torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1)
@@ -109,16 +118,20 @@ class DINOv2Encoder(nn.Module):
             self._apply_lora(lora_rank, lora_alpha)
 
     def _apply_lora(self, rank: int, alpha: int) -> None:
-        from peft import LoraConfig, get_peft_model
+        peft = import_optional(
+            "peft",
+            feature="DINOv2 LoRA fine-tuning",
+            install_hint="pip install -e '.[foundation]' or pip install peft",
+        )
 
-        config = LoraConfig(
+        config = peft.LoraConfig(
             r=rank,
             lora_alpha=alpha,
             target_modules=["query", "value"],
             lora_dropout=0.05,
             bias="none",
         )
-        self.backbone = get_peft_model(self.backbone, config)
+        self.backbone = peft.get_peft_model(self.backbone, config)
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         """Extract multi-scale features.
@@ -355,6 +368,7 @@ class DINOv2Segmenter(nn.Module):
         frozen_encoder: bool = True,
         hidden_dim: int = 256,
         classes: int = 1,
+        backbone: nn.Module | None = None,
     ):
         super().__init__()
         self.encoder_name = encoder_name
@@ -367,6 +381,7 @@ class DINOv2Segmenter(nn.Module):
             use_lora=use_lora,
             lora_rank=lora_rank,
             lora_alpha=lora_alpha,
+            backbone=backbone,
         )
 
         self.decoder = UPerNetHead(

@@ -3,11 +3,17 @@
 All tests use mocked backbones so no model download is required.
 """
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
 import torch.nn as nn
+
+pytest.importorskip(
+    "transformers",
+    reason="Foundation-model tests require transformers.",
+)
 
 from mayascan.models.dinov2 import (
     DINOV2_DIMS,
@@ -15,11 +21,9 @@ from mayascan.models.dinov2 import (
     DINOV2_MODELS,
     IMAGENET_MEAN,
     IMAGENET_STD,
-    DINOv2Encoder,
     DINOv2Segmenter,
     UPerNetHead,
 )
-
 
 # ---------------------------------------------------------------------------
 # UPerNet decoder tests
@@ -71,25 +75,24 @@ class TestUPerNetHead:
 
 def _make_mock_backbone(embed_dim: int, num_layers: int):
     """Create a mock Dinov2Model that returns fake hidden states."""
-    mock = MagicMock()
+    class _MockBackbone(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.dummy = nn.Parameter(torch.zeros(1))
 
-    def mock_forward(pixel_values, output_hidden_states=True, return_dict=True):
-        B = pixel_values.shape[0]
-        H, W = pixel_values.shape[2], pixel_values.shape[3]
-        h, w = H // 14, W // 14
-        n_tokens = h * w + 1  # CLS + patches
+        def forward(self, pixel_values, output_hidden_states=True, return_dict=True):
+            B = pixel_values.shape[0]
+            H, W = pixel_values.shape[2], pixel_values.shape[3]
+            h, w = H // 14, W // 14
+            n_tokens = h * w + 1  # CLS + patches
+            return SimpleNamespace(
+                hidden_states=[
+                    torch.randn(B, n_tokens, embed_dim)
+                    for _ in range(num_layers + 1)
+                ]
+            )
 
-        result = MagicMock()
-        # hidden_states[0] = embeddings, then one per layer
-        result.hidden_states = [
-            torch.randn(B, n_tokens, embed_dim)
-            for _ in range(num_layers + 1)
-        ]
-        return result
-
-    mock.side_effect = mock_forward
-    mock.parameters = MagicMock(return_value=iter([torch.zeros(1)]))
-    return mock
+    return _MockBackbone()
 
 
 class TestDINOv2SegmenterMocked:
@@ -98,15 +101,12 @@ class TestDINOv2SegmenterMocked:
     @pytest.fixture()
     def model(self):
         """Build a DINOv2Segmenter with mocked encoder backbone."""
-        with patch("transformers.Dinov2Model") as MockModel:
-            MockModel.from_pretrained.return_value = _make_mock_backbone(1024, 24)
-            m = DINOv2Segmenter(
-                encoder_name="dinov2-large",
-                use_lora=False,
-                frozen_encoder=False,
-            )
-        # Replace the backbone call with our mock
-        m.encoder.backbone = _make_mock_backbone(1024, 24)
+        m = DINOv2Segmenter(
+            encoder_name="dinov2-large",
+            use_lora=False,
+            frozen_encoder=False,
+            backbone=_make_mock_backbone(1024, 24),
+        )
         m.eval()  # eval mode avoids BatchNorm batch_size=1 issue in PSP pooling
         return m
 
@@ -165,8 +165,8 @@ class TestBuildModelDINOv2:
         """Valid DINOv2 encoder name is accepted (model construction)."""
         from mayascan.train import _build_model
 
-        with patch("transformers.Dinov2Model") as MockModel:
-            MockModel.from_pretrained.return_value = _make_mock_backbone(1024, 24)
+        with patch("transformers.Dinov2Model.from_pretrained") as from_pretrained:
+            from_pretrained.return_value = _make_mock_backbone(1024, 24)
             model = _build_model("dinov2", "dinov2-large", use_lora=False)
             assert isinstance(model, DINOv2Segmenter)
 

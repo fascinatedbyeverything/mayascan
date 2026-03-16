@@ -3,6 +3,7 @@
 Tests the complete workflow: synthetic DEM -> visualize -> detect -> export.
 """
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -12,9 +13,15 @@ import pytest
 import mayascan
 from mayascan.detect import DetectionResult
 from mayascan.export import to_csv, to_geojson, to_geotiff, to_kml
-from mayascan.report import generate_report, report_to_text, report_to_html, save_report
-from mayascan.features import extract_features, filter_features, feature_summary
-from mayascan.metrics import compute_binary_metrics, compute_multiclass_metrics, mean_iou
+from mayascan.features import extract_features, feature_summary, filter_features
+from mayascan.metrics import (
+    compute_binary_metrics,
+    compute_multiclass_metrics,
+    mean_iou,
+)
+from mayascan.report import generate_report, report_to_html, report_to_text, save_report
+
+HAS_SMP = importlib.util.find_spec("segmentation_models_pytorch") is not None
 
 
 def _make_mound_dem(size: int = 480, num_mounds: int = 5, seed: int = 42) -> np.ndarray:
@@ -44,6 +51,7 @@ def _make_mound_dem(size: int = 480, num_mounds: int = 5, seed: int = 42) -> np.
     return dem
 
 
+@pytest.mark.skipif(not HAS_SMP, reason="Pipeline integration tests require segmentation-models-pytorch.")
 class TestFullPipelineSynthetic:
     """End-to-end test: synthetic DEM -> visualize -> detect -> export."""
 
@@ -104,6 +112,7 @@ class TestFullPipelineSynthetic:
         assert isinstance(geojson_data["features"], list)
 
 
+@pytest.mark.skipif(not HAS_SMP, reason="Pipeline integration tests require segmentation-models-pytorch.")
 class TestFullPipelineWithAnalysis:
     """End-to-end: DEM -> detect -> features + report + metrics + all exports."""
 
@@ -242,6 +251,7 @@ class TestMetricsIntegration:
         assert metrics[2].iou == 0.0
 
 
+@pytest.mark.skipif(not HAS_SMP, reason="process_dem currently requires segmentation-models-pytorch.")
 class TestProcessDemConvenience:
     """Test the convenience function mayascan.process_dem."""
 

@@ -15,13 +15,13 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any
+from types import ModuleType
 
 import numpy as np
-import segmentation_models_pytorch as smp
 import torch
 from tqdm import tqdm
 
+from mayascan._optional import import_optional
 from mayascan.config import (
     CLASS_NAMES,
     CONFIDENCE_THRESHOLD,
@@ -35,7 +35,6 @@ from mayascan.config import (
     V2_CLASSES,
     V2_ENCODER,
 )
-from mayascan.models.unet import MayaScanUNet
 from mayascan.tile import slice_tiles, stitch_tiles
 
 
@@ -158,6 +157,11 @@ def _load_v2_model(
     device: torch.device | None = None,
 ) -> torch.nn.Module:
     """Load a v2 per-class binary segmentation model."""
+    smp = import_optional(
+        "segmentation_models_pytorch",
+        feature="v2 detection model loading",
+        install_hint="pip install -e '.[dev]' or pip install segmentation-models-pytorch",
+    )
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
     # Auto-detect arch/encoder from checkpoint metadata
@@ -272,6 +276,7 @@ def run_detection(
         Dataclass with ``classes``, ``confidence``, and ``class_names``.
     """
     device = _select_device(device)
+    from mayascan.models.unet import MayaScanUNet
 
     # --- model setup ---
     num_classes = len(CLASS_NAMES)
@@ -319,6 +324,19 @@ def run_detection(
         classes=classes,
         confidence=confidence,
         class_names=dict(CLASS_NAMES),
+    )
+
+
+def detect(
+    visualization: np.ndarray,
+    model_path: str | None = None,
+    confidence_threshold: float = CONFIDENCE_THRESHOLD,
+) -> DetectionResult:
+    """Convenience wrapper mirroring the package-level ``mayascan.detect`` API."""
+    return run_detection(
+        visualization,
+        model_path=model_path,
+        confidence_threshold=confidence_threshold,
     )
 
 
@@ -578,8 +596,6 @@ def run_detection_v2_ensemble(
 
     # Per-class averaged probability maps
     class_probs: dict[int, np.ndarray] = {}
-    has_fold_models = False
-
     for cls_id, cls_name in V2_CLASSES.items():
         fold_paths = discover_fold_models(model_dir, cls_name, arch, encoder)
 
@@ -592,9 +608,6 @@ def run_detection_v2_ensemble(
                 fold_paths = [single_path]
             else:
                 continue
-
-        if len(fold_paths) > 1:
-            has_fold_models = True
 
         # Average predictions across all fold models
         avg_prob = np.zeros((H, W), dtype=np.float64)
@@ -678,3 +691,22 @@ def run_detection_v2_ensemble(
         confidence=confidence,
         class_names=dict(CLASS_NAMES),
     )
+
+
+class _CallableDetectModule(ModuleType):
+    """Allow ``mayascan.detect(viz)`` to work even after submodule imports."""
+
+    def __call__(
+        self,
+        visualization: np.ndarray,
+        model_path: str | None = None,
+        confidence_threshold: float = CONFIDENCE_THRESHOLD,
+    ) -> DetectionResult:
+        return detect(
+            visualization,
+            model_path=model_path,
+            confidence_threshold=confidence_threshold,
+        )
+
+
+sys.modules[__name__].__class__ = _CallableDetectModule
